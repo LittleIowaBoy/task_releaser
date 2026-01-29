@@ -292,7 +292,7 @@ class ExcelParser:
                 if task_id_rows['__condition_met__'].all():
                     # Only add if task_id is numeric
                     if self._is_numeric(task_id):
-                        valid_task_ids.append(task_id)
+                        valid_task_ids.append(int(task_id))
             
             # Remove temporary column
             self.df.drop('__condition_met__', axis=1, inplace=True)
