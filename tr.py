@@ -1,6 +1,7 @@
 import pandas as pd
 import os
 from typing import List, Callable, Dict, Any
+from pathlib import Path
 
 
 class ExcelParser:
@@ -312,14 +313,37 @@ class ExcelParser:
 
 # Example usage
 if __name__ == "__main__":
-    # Initialize parser with the actual data file
-    parser = ExcelParser("data2.csv")
+    # Find the most recently downloaded file
+    downloads_path = Path.home() / "Downloads"
+    
+    # Get all CSV and Excel files from Downloads folder, sorted by modification time
+    files = []
+    for ext in ['*.csv', '*.xlsx', '*.xls']:
+        files.extend(downloads_path.glob(ext))
+    
+    if files:
+        # Sort by modification time (most recent first)
+        most_recent_file = max(files, key=lambda f: f.stat().st_mtime)
+        filepath = str(most_recent_file)
+        print(f"Using most recently downloaded file: {most_recent_file.name}")
+    else:
+        print("Error: No CSV or Excel files found in Downloads folder")
+        filepath = None
+    
+    if filepath:
+        # Initialize parser with the most recent file
+        parser = ExcelParser(filepath)
     
     # Read the file
-    parser.read_excel()
+    try:
+        parser.read_excel()
+    except:
+        print("No file found")
     
     # Get Task IDs where Active OHB > Allocated
-    if parser.df is not None:
+    if parser.df is None:
+        print("No data loaded")
+    elif parser.df is not None:
         task_ids = parser.get_task_ids_where_condition(
             task_id_col="Task ID",
             condition_col1="Active OHB",
