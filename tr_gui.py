@@ -82,6 +82,9 @@ class ExcelParserGUI(QMainWindow):
         title.setFont(title_font)
         main_layout.addWidget(title)
         
+        # Status label (initialize early before populate_downloads_files)
+        self.status_label = QLabel("Ready")
+        
         # File selection section
         file_layout = QHBoxLayout()
         file_layout.addWidget(QLabel("Select file from Downloads:"))
@@ -121,10 +124,6 @@ class ExcelParserGUI(QMainWindow):
         self.output_text = QTextEdit()
         self.output_text.setReadOnly(True)
         main_layout.addWidget(self.output_text)
-        
-        # Status label
-        self.status_label = QLabel("Ready")
-        main_layout.addWidget(self.status_label)
         
         # Set layout
         central_widget.setLayout(main_layout)
