@@ -235,7 +235,7 @@ class ExcelParser:
             return False
     
     def get_task_ids_where_condition(self, task_id_col: str, condition_col1: str, condition_col2: str, 
-                                      comparison: str = ">") -> List[Any]:
+                                      comparison: str = ">=") -> List[Any]:
         """
         Get unique values from one column where a condition is met comparing two other columns.
         For Task IDs that appear multiple times, ALL instances must meet the condition to be returned.
@@ -265,25 +265,30 @@ class ExcelParser:
             return []
         
         try:
-            # Create boolean mask based on comparison
+            # Convert comparison columns to numeric where possible to avoid string/formatting issues
+            s1 = pd.to_numeric(self.df[condition_col1], errors='coerce')
+            s2 = pd.to_numeric(self.df[condition_col2], errors='coerce')
+
+            # Create boolean mask based on comparison using numeric series (NaNs will be False)
             if comparison == ">":
-                mask = self.df[condition_col1] > self.df[condition_col2]
+                mask = s1 > s2
             elif comparison == "<":
-                mask = self.df[condition_col1] < self.df[condition_col2]
+                mask = s1 < s2
             elif comparison == ">=":
-                mask = self.df[condition_col1] >= self.df[condition_col2]
+                mask = s1 >= s2
             elif comparison == "<=":
-                mask = self.df[condition_col1] <= self.df[condition_col2]
+                mask = s1 <= s2
             elif comparison == "==":
-                mask = self.df[condition_col1] == self.df[condition_col2]
+                mask = s1 == s2
             elif comparison == "!=":
-                mask = self.df[condition_col1] != self.df[condition_col2]
+                mask = s1 != s2
             else:
                 print(f"Error: Invalid comparison operator '{comparison}'")
                 return []
             
             # Add a temporary column to track which rows meet the condition
-            self.df['__condition_met__'] = mask
+            # Store condition mask as a temporary column on a copy to avoid altering original types
+            self.df['__condition_met__'] = mask.fillna(False)
             
             # Group by Task ID and check if ALL instances meet the condition
             valid_task_ids = []
@@ -340,7 +345,7 @@ if __name__ == "__main__":
     except:
         print("No file found")
     
-    # Get Task IDs where Active OHB > Allocated
+    # Get Task IDs where Active OHB >= Allocated
     if parser.df is None:
         print("No data loaded")
     elif parser.df is not None:
@@ -348,10 +353,10 @@ if __name__ == "__main__":
             task_id_col="Task ID",
             condition_col1="Active OHB",
             condition_col2="Allocated",
-            comparison=">"
+            comparison=">="
         )
         
-        print("\n--- Task IDs where Active OHB > Allocated ---")
+        print("\n--- Task IDs where Active OHB >= Allocated ---")
         print(task_ids)
     else:
         print("Failed to load data")
