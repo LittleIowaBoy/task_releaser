@@ -15,6 +15,7 @@ class WorkerThread(QThread):
     error = pyqtSignal(str)
     output = pyqtSignal(str)
     data_loaded = pyqtSignal(object)  # Emit the dataframe
+    task_ids_ready = pyqtSignal(list)  # Emit the task IDs for clipboard copy
     
     def __init__(self, filepath: str):
         super().__init__()
@@ -43,6 +44,7 @@ class WorkerThread(QThread):
                 self.output.emit(f"\n--- Task IDs where Active OHB >= Allocated ---\n")
                 self.output.emit(f"{task_ids}\n")
                 
+                self.task_ids_ready.emit(task_ids)
                 self.data_loaded.emit(self.parser.df)
             else:
                 self.error.emit("Failed to load data")
@@ -60,6 +62,7 @@ class ExcelParserGUI(QMainWindow):
         super().__init__()
         self.worker_thread = None
         self.current_df = None
+        self.task_ids = None
         self.init_ui()
     
     def init_ui(self):
@@ -109,6 +112,11 @@ class ExcelParserGUI(QMainWindow):
         self.clear_button = QPushButton("Clear Output")
         self.clear_button.clicked.connect(self.clear_output)
         button_layout.addWidget(self.clear_button)
+        
+        self.copy_button = QPushButton("Copy Task IDs to Clipboard")
+        self.copy_button.clicked.connect(self.copy_to_clipboard)
+        self.copy_button.setEnabled(False)
+        button_layout.addWidget(self.copy_button)
         
         self.terminate_button = QPushButton("Terminate")
         self.terminate_button.clicked.connect(self.terminate_program)
@@ -169,6 +177,7 @@ class ExcelParserGUI(QMainWindow):
         self.worker_thread = WorkerThread(filepath)
         self.worker_thread.output.connect(self.append_output)
         self.worker_thread.error.connect(self.on_error)
+        self.worker_thread.task_ids_ready.connect(self.on_task_ids_ready)
         self.worker_thread.data_loaded.connect(self.on_data_loaded)
         self.worker_thread.finished.connect(self.on_finished)
         self.worker_thread.start()
@@ -181,6 +190,11 @@ class ExcelParserGUI(QMainWindow):
         """Handle errors from worker thread"""
         self.output_text.append(f"\nERROR: {error_msg}\n")
         self.status_label.setText("Error occurred")
+    
+    def on_task_ids_ready(self, task_ids: list):
+        """Handle task IDs from worker thread"""
+        self.task_ids = task_ids
+        self.copy_button.setEnabled(True)
     
     def on_data_loaded(self, df: pd.DataFrame):
         """Handle data loaded from worker thread"""
@@ -200,6 +214,14 @@ class ExcelParserGUI(QMainWindow):
         """Clear the output display"""
         self.output_text.clear()
         self.status_label.setText("Output cleared")
+    
+    def copy_to_clipboard(self):
+        """Copy task IDs to clipboard"""
+        if self.task_ids:
+            clipboard_text = ", ".join(map(str, self.task_ids))
+            QApplication.clipboard().setText(clipboard_text)
+            self.status_label.setText(f"Copied {len(self.task_ids)} Task ID(s) to clipboard")
+            self.output_text.append(f"\nCopied to clipboard: {clipboard_text}\n")
     
     def terminate_program(self):
         """Terminate the application"""
