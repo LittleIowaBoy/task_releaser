@@ -32,15 +32,15 @@ class WorkerThread(QThread):
                 self.output.emit(f"Columns: {list(self.parser.df.columns)}\n")
                 self.output.emit(f"\nFirst few rows:\n{self.parser.df.head().to_string()}\n")
                 
-                # Get Task IDs where Active OHB > Allocated
+                # Get Task IDs where Active OHB >= Allocated
                 task_ids = self.parser.get_task_ids_where_condition(
                     task_id_col="Task ID",
                     condition_col1="Active OHB",
                     condition_col2="Allocated",
-                    comparison=">"
+                    comparison=">="
                 )
                 
-                self.output.emit(f"\n--- Task IDs where Active OHB > Allocated ---\n")
+                self.output.emit(f"\n--- Task IDs where Active OHB >= Allocated ---\n")
                 self.output.emit(f"{task_ids}\n")
                 
                 self.data_loaded.emit(self.parser.df)
