@@ -17,9 +17,10 @@ class WorkerThread(QThread):
     data_loaded = pyqtSignal(object)  # Emit the dataframe
     task_ids_ready = pyqtSignal(list)  # Emit the task IDs for clipboard copy
     
-    def __init__(self, filepath: str):
+    def __init__(self, filepath: str, function_name: str):
         super().__init__()
         self.filepath = filepath
+        self.function_name = function_name
         self.parser = None
     
     def run(self):
@@ -33,18 +34,9 @@ class WorkerThread(QThread):
                 self.output.emit(f"Columns: {list(self.parser.df.columns)}\n")
                 self.output.emit(f"\nFirst few rows:\n{self.parser.df.head().to_string()}\n")
                 
-                # Get Task IDs where Active OHB >= Allocated
-                task_ids = self.parser.get_task_ids_where_condition(
-                    task_id_col="Task ID",
-                    condition_col1="Active OHB",
-                    condition_col2="Allocated",
-                    comparison=">="
-                )
+                # Call the selected function
+                self.execute_selected_function()
                 
-                self.output.emit(f"\n--- Task IDs where Active OHB >= Allocated ---\n")
-                self.output.emit(f"{task_ids}\n")
-                
-                self.task_ids_ready.emit(task_ids)
                 self.data_loaded.emit(self.parser.df)
             else:
                 self.error.emit("Failed to load data")
@@ -53,6 +45,62 @@ class WorkerThread(QThread):
             self.error.emit(f"Error: {str(e)}")
         finally:
             self.finished.emit()
+    
+    def execute_selected_function(self):
+        """Execute the selected function from the dropdown"""
+        try:
+            if self.function_name == "get_task_ids_where_condition":
+                # Get Task IDs where Active OHB < Allocated
+                task_ids, items_not_met = self.parser.get_task_ids_where_condition(
+                    task_id_col="Task ID",
+                    condition_col1="Active OHB",
+                    condition_col2="Allocated",
+                    comparison=">=",
+                    item_col="Item"
+                )
+                
+                # Display items from Task IDs that don't meet the condition first
+                self.output.emit(f"\n--- Items that need Replenishment Task (Active OHB < Allocated) ---\n")
+                if items_not_met:
+                    for item, task_id_count in sorted(items_not_met.items(), key=lambda x: x[1], reverse=True):
+                        self.output.emit(f"  {item}: affects {task_id_count} Task ID(s)\n")
+                else:
+                    self.output.emit("No items found in Task IDs that don't meet the condition.\n")
+                
+                # Then display task IDs that meet the condition
+                self.output.emit(f"\n--- Tasks that need Released (Active OHB >= Allocated) ---\n")
+                self.output.emit(f"{task_ids}\n")
+                
+                self.task_ids_ready.emit(task_ids)
+            
+            elif self.function_name == "filter_by_value":
+                self.output.emit(f"\n--- Filter by Value (Task ID = 1) ---\n")
+                filtered_df = self.parser.filter_by_value("Task ID", 1)
+                if filtered_df is not None:
+                    self.output.emit(f"{filtered_df.to_string()}\n")
+            
+            elif self.function_name == "filter_by_range":
+                self.output.emit(f"\n--- Filter by Range (Active OHB: 5-15) ---\n")
+                filtered_df = self.parser.filter_by_range("Active OHB", min_val=5, max_val=15)
+                if filtered_df is not None:
+                    self.output.emit(f"{filtered_df.to_string()}\n")
+            
+            elif self.function_name == "filter_by_contains":
+                self.output.emit(f"\n--- Filter by Contains ---\n")
+                filtered_df = self.parser.filter_by_contains("Task ID", "1")
+                if filtered_df is not None:
+                    self.output.emit(f"Found {len(filtered_df)} rows\n")
+            
+            elif self.function_name == "display_all":
+                self.output.emit(f"\n--- All Data ---\n")
+                self.parser.display()
+                self.output.emit(f"{self.parser.df.to_string()}\n")
+            
+            else:
+                self.output.emit(f"Unknown function: {self.function_name}\n")
+        
+        except Exception as e:
+            self.output.emit(f"Error executing function: {str(e)}\n")
 
 
 class ExcelParserGUI(QMainWindow):
@@ -68,7 +116,7 @@ class ExcelParserGUI(QMainWindow):
     def init_ui(self):
         """Initialize the user interface"""
         self.setWindowTitle("Excel Parser GUI")
-        self.setGeometry(100, 100, 1000, 700)
+        self.setGeometry(100, 100, 1000, 600)
         
         # Create central widget
         central_widget = QWidget()
@@ -98,10 +146,24 @@ class ExcelParserGUI(QMainWindow):
         
         main_layout.addLayout(file_layout)
         
+        # Function selection section
+        function_layout = QHBoxLayout()
+        function_layout.addWidget(QLabel("Select function to execute:"))
+        
+        self.function_combo = QComboBox()
+        self.function_combo.addItem("get_task_ids_where_condition", "get_task_ids_where_condition")
+        self.function_combo.addItem("filter_by_value", "filter_by_value")
+        self.function_combo.addItem("filter_by_range", "filter_by_range")
+        self.function_combo.addItem("filter_by_contains", "filter_by_contains")
+        self.function_combo.addItem("display_all", "display_all")
+        
+        function_layout.addWidget(self.function_combo)
+        main_layout.addLayout(function_layout)
+        
         # Buttons layout
         button_layout = QHBoxLayout()
         
-        self.start_button = QPushButton("Start Analysis")
+        self.start_button = QPushButton("Analyze")
         self.start_button.clicked.connect(self.start_analysis)
         button_layout.addWidget(self.start_button)
         
@@ -164,17 +226,19 @@ class ExcelParserGUI(QMainWindow):
             return
         
         filepath = self.file_combo.currentData()
+        selected_function = self.function_combo.currentData()
         
         # Disable buttons while processing
         self.start_button.setEnabled(False)
         self.file_combo.setEnabled(False)
+        self.function_combo.setEnabled(False)
         self.refresh_button.setEnabled(False)
         
         self.status_label.setText("Processing... please wait")
         self.output_text.append("Starting analysis...\n")
         
         # Create and start worker thread
-        self.worker_thread = WorkerThread(filepath)
+        self.worker_thread = WorkerThread(filepath, selected_function)
         self.worker_thread.output.connect(self.append_output)
         self.worker_thread.error.connect(self.on_error)
         self.worker_thread.task_ids_ready.connect(self.on_task_ids_ready)
@@ -205,6 +269,7 @@ class ExcelParserGUI(QMainWindow):
         # Re-enable buttons
         self.start_button.setEnabled(True)
         self.file_combo.setEnabled(True)
+        self.function_combo.setEnabled(True)
         self.refresh_button.setEnabled(True)
         
         self.status_label.setText("Analysis complete")

@@ -235,9 +235,9 @@ class ExcelParser:
             return False
     
     def get_task_ids_where_condition(self, task_id_col: str, condition_col1: str, condition_col2: str, 
-                                      comparison: str = ">=") -> List[Any]:
+                                      comparison: str = ">=", item_col: str = "Item") -> tuple:
         """
-        Get unique values from one column where a condition is met comparing two other columns.
+        Get Task IDs where condition is met, and items from Task IDs that don't meet the condition.
         For Task IDs that appear multiple times, ALL instances must meet the condition to be returned.
         
         Args:
@@ -245,24 +245,27 @@ class ExcelParser:
             condition_col1: First column for comparison (e.g., 'Active OHB')
             condition_col2: Second column for comparison (e.g., 'Allocated')
             comparison: Comparison operator as string: '>', '<', '>=', '<=', '==', '!='
+            item_col: Column name for items to track (e.g., 'Item')
             
         Returns:
-            List of unique values where ALL instances meet the condition
+            Tuple of two objects:
+                - task_ids: List of unique Task IDs where ALL instances meet the condition
+                - items_not_met: Dict of items from Task IDs that don't meet condition, with count of affected Task IDs
         """
         if self.df is None or self.df.empty:
             print("Error: No data loaded")
-            return []
+            return [], {}
         
         # Validate columns exist
         missing_cols = []
-        for col in [task_id_col, condition_col1, condition_col2]:
+        for col in [task_id_col, condition_col1, condition_col2, item_col]:
             if col not in self.df.columns:
                 missing_cols.append(col)
         
         if missing_cols:
             print(f"Error: Missing columns: {missing_cols}")
             print(f"Available columns: {list(self.df.columns)}")
-            return []
+            return [], {}
         
         try:
             # Convert comparison columns to numeric where possible to avoid string/formatting issues
@@ -284,14 +287,15 @@ class ExcelParser:
                 mask = s1 != s2
             else:
                 print(f"Error: Invalid comparison operator '{comparison}'")
-                return []
+                return [], {}
             
             # Add a temporary column to track which rows meet the condition
-            # Store condition mask as a temporary column on a copy to avoid altering original types
             self.df['__condition_met__'] = mask.fillna(False)
             
             # Group by Task ID and check if ALL instances meet the condition
             valid_task_ids = []
+            invalid_task_ids = []
+            
             for task_id in self.df[task_id_col].unique():
                 task_id_rows = self.df[self.df[task_id_col] == task_id]
                 # Check if all instances of this Task ID meet the condition
@@ -299,6 +303,19 @@ class ExcelParser:
                     # Only add if task_id is numeric
                     if self._is_numeric(task_id):
                         valid_task_ids.append(int(task_id))
+                else:
+                    # Task ID does not meet condition
+                    if self._is_numeric(task_id):
+                        invalid_task_ids.append(int(task_id))
+            
+            # For items in Task IDs that don't meet the condition, count how many Task IDs each item affects
+            items_not_met_dict = {}
+            if invalid_task_ids:
+                invalid_df = self.df[self.df[task_id_col].isin(invalid_task_ids)]
+                for item in invalid_df[item_col].unique():
+                    # Count how many unique Task IDs this item appears in (among invalid Task IDs)
+                    affected_task_ids = invalid_df[invalid_df[item_col] == item][task_id_col].unique()
+                    items_not_met_dict[item] = len(affected_task_ids)
             
             # Remove temporary column
             self.df.drop('__condition_met__', axis=1, inplace=True)
@@ -306,14 +323,17 @@ class ExcelParser:
             matching_rows = self.df[mask]
             print(f"Found {len(matching_rows)} rows where {condition_col1} {comparison} {condition_col2}")
             print(f"Extracted {len(valid_task_ids)} unique Task IDs (where ALL instances meet the condition)")
+            print(f"\n--- Items from Task IDs that do NOT meet the condition ---")
+            for item, task_id_count in sorted(items_not_met_dict.items(), key=lambda x: x[1], reverse=True):
+                print(f"  {item}: affects {task_id_count} Task ID(s)")
             
-            return valid_task_ids
+            return valid_task_ids, items_not_met_dict
         
         except Exception as e:
             print(f"Error processing data: {e}")
             import traceback
             traceback.print_exc()
-            return []
+            return [], {}
 
 
 # Example usage
