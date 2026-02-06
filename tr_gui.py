@@ -22,6 +22,39 @@ class WorkerThread(QThread):
         self.filepath = filepath
         self.function_name = function_name
         self.parser = None
+
+    def format_df(self, df: pd.DataFrame) -> str:
+        """Format a DataFrame into an aligned table string similar to ExcelParser.display()."""
+        if df is None or df.empty:
+            return "No data to display\n"
+
+        cols = list(df.columns)
+        rows = []
+        for _, r in df.iterrows():
+            row = ["" if pd.isna(r[c]) else str(r[c]) for c in cols]
+            rows.append(row)
+
+        # Compute column widths
+        col_widths = {}
+        for i, c in enumerate(cols):
+            maxw = len(str(c))
+            for row in rows:
+                if len(row[i]) > maxw:
+                    maxw = len(row[i])
+            col_widths[c] = maxw
+
+        # Build header and separator
+        header_parts = [str(c).ljust(col_widths[c]) for c in cols]
+        header = " | ".join(header_parts)
+        sep_parts = ["-" * col_widths[c] for c in cols]
+        separator = "-+-".join(sep_parts)
+
+        lines = [header, separator]
+        for row in rows:
+            row_parts = [row[i].ljust(col_widths[cols[i]]) for i in range(len(cols))]
+            lines.append(" | ".join(row_parts))
+
+        return "\n".join(lines) + "\n"
     
     def run(self):
         try:
@@ -32,7 +65,8 @@ class WorkerThread(QThread):
             if self.parser.df is not None:
                 self.output.emit(f"Successfully loaded CSV file with {len(self.parser.df)} rows and {len(self.parser.df.columns)} columns\n")
                 self.output.emit(f"Columns: {list(self.parser.df.columns)}\n")
-                self.output.emit(f"\nFirst few rows:\n{self.parser.df.head().to_string()}\n")
+                self.output.emit("\nFirst few rows:\n")
+                self.output.emit(self.format_df(self.parser.df.head()))
                 
                 # Call the selected function
                 self.execute_selected_function()
@@ -77,13 +111,13 @@ class WorkerThread(QThread):
                 self.output.emit(f"\n--- Filter by Value (Task ID = 1) ---\n")
                 filtered_df = self.parser.filter_by_value("Task ID", 1)
                 if filtered_df is not None:
-                    self.output.emit(f"{filtered_df.to_string()}\n")
+                    self.output.emit(self.format_df(filtered_df))
             
             elif self.function_name == "filter_by_range":
                 self.output.emit(f"\n--- Filter by Range (Active OHB: 5-15) ---\n")
                 filtered_df = self.parser.filter_by_range("Active OHB", min_val=5, max_val=15)
                 if filtered_df is not None:
-                    self.output.emit(f"{filtered_df.to_string()}\n")
+                    self.output.emit(self.format_df(filtered_df))
             
             elif self.function_name == "filter_by_contains":
                 self.output.emit(f"\n--- Filter by Contains ---\n")
@@ -93,8 +127,7 @@ class WorkerThread(QThread):
             
             elif self.function_name == "display_all":
                 self.output.emit(f"\n--- All Data ---\n")
-                self.parser.display()
-                self.output.emit(f"{self.parser.df.to_string()}\n")
+                self.output.emit(self.format_df(self.parser.df))
             
             else:
                 self.output.emit(f"Unknown function: {self.function_name}\n")

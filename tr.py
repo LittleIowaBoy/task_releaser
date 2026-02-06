@@ -203,12 +203,41 @@ class ExcelParser:
         """
         if dataframe is None:
             dataframe = self.df
-        
+
         if dataframe is None or dataframe.empty:
             print("No data to display")
             return
-        
-        print(dataframe.to_string())
+
+        df = dataframe
+
+        # Prepare string representations for all values
+        cols = list(df.columns)
+        rows = []
+        for _, r in df.iterrows():
+            row = ["" if pd.isna(r[c]) else str(r[c]) for c in cols]
+            rows.append(row)
+
+        # Compute column widths (consider header and values)
+        col_widths = {}
+        for i, c in enumerate(cols):
+            maxw = len(str(c))
+            for row in rows:
+                if len(row[i]) > maxw:
+                    maxw = len(row[i])
+            col_widths[c] = maxw
+
+        # Build header and separator
+        header_parts = [str(c).ljust(col_widths[c]) for c in cols]
+        header = " | ".join(header_parts)
+        sep_parts = ["-" * col_widths[c] for c in cols]
+        separator = "-+-".join(sep_parts)
+
+        # Print header, separator, and rows with aligned columns
+        print(header)
+        print(separator)
+        for row in rows:
+            row_parts = [row[i].ljust(col_widths[cols[i]]) for i in range(len(cols))]
+            print(" | ".join(row_parts))
     
     def get_column_names(self) -> List[str]:
         """Get list of column names in the loaded data."""
