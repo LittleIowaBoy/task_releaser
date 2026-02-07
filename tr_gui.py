@@ -98,7 +98,7 @@ class WorkerThread(QThread):
             return df
 
         # Drop columns with specific names
-        columns_to_drop = ['Rsn Code', 'Tie']
+        columns_to_drop = ['Rsn Code', 'Tie', 'LOCN_CLASS', 'CYCLE_CNT_PENDING']
         df = df.drop(columns=[col for col in columns_to_drop if col in df.columns])
 
         # Sort by location column if present (numeric-aware sort ascending)
