@@ -4,10 +4,11 @@ from pathlib import Path
 from typing import Dict
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QTextEdit, QLabel, QComboBox, QMessageBox, QSplitter
+    QPushButton, QTextEdit, QLabel, QComboBox, QMessageBox, QSplitter,
+    QTableWidget, QTableWidgetItem, QCheckBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QTextDocument, QTextCursor, QColor
 from tr import ExcelParser
 
 
@@ -16,6 +17,7 @@ class WorkerThread(QThread):
     finished = pyqtSignal()
     error = pyqtSignal(str)
     output = pyqtSignal(str)
+    table_ready = pyqtSignal(pd.DataFrame)  # Emit processed DataFrame for table display
     data_loaded = pyqtSignal(object)  # Emit the dataframe
     task_ids_ready = pyqtSignal(list)  # Emit the task IDs for clipboard copy
     
@@ -40,7 +42,19 @@ class WorkerThread(QThread):
         # Drop columns with specific names
         columns_to_drop = ['Rsn Code', 'Tie']
         df = df.drop(columns=[col for col in columns_to_drop if col in df.columns])
-        
+
+        # Sort by 'Location' column if present (numeric-aware sort ascending)
+        if 'Location' in df.columns:
+            try:
+                # Strip any non-digit prefix (e.g., 'L-') and convert the remainder to numeric for sorting
+                df = df.sort_values(
+                    by='Location',
+                    key=lambda s: pd.to_numeric(s.astype(str).str.replace(r'^\D+', '', regex=True), errors='coerce')
+                )
+            except Exception:
+                # Fallback to default lexicographic sort if unexpected errors occur
+                df = df.sort_values(by='Location')
+
         cols = list(df.columns)
         rows = []
 
@@ -77,6 +91,37 @@ class WorkerThread(QThread):
             lines.append(" | ".join(row_parts))
 
         return "\n".join(lines) + "\n"
+    
+    def prepare_df_for_table(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Prepare DataFrame for table display: drop unwanted columns, sort by location column."""
+        if df is None or df.empty:
+            return df
+
+        # Drop columns with specific names
+        columns_to_drop = ['Rsn Code', 'Tie']
+        df = df.drop(columns=[col for col in columns_to_drop if col in df.columns])
+
+        # Sort by location column if present (numeric-aware sort ascending)
+        # Check for different location column names
+        location_columns = ['Location', 'Locn', 'DSP_LOCN']
+        location_col = None
+        for col in location_columns:
+            if col in df.columns:
+                location_col = col
+                break
+        
+        if location_col:
+            try:
+                # Strip any non-digit prefix (e.g., 'L-') and convert the remainder to numeric for sorting
+                df = df.sort_values(
+                    by=location_col,
+                    key=lambda s: pd.to_numeric(s.astype(str).str.replace(r'^\D+', '', regex=True), errors='coerce')
+                )
+            except Exception:
+                # Fallback to default lexicographic sort if unexpected errors occur
+                df = df.sort_values(by=location_col)
+        
+        return df.reset_index(drop=True)
     
     def run(self):
         try:
@@ -133,13 +178,15 @@ class WorkerThread(QThread):
                 self.output.emit(f"\n--- Filter by Value (Task ID = 1) ---\n")
                 filtered_df = self.parser.filter_by_value("Task ID", 1)
                 if filtered_df is not None:
-                    self.output.emit(self.format_df(filtered_df))
+                    prepared_df = self.prepare_df_for_table(filtered_df)
+                    self.table_ready.emit(prepared_df)
             
             elif self.function_name == "filter_by_range":
                 self.output.emit(f"\n--- Filter by Range (Active OHB: 5-15) ---\n")
                 filtered_df = self.parser.filter_by_range("Active OHB", min_val=5, max_val=15)
                 if filtered_df is not None:
-                    self.output.emit(self.format_df(filtered_df))
+                    prepared_df = self.prepare_df_for_table(filtered_df)
+                    self.table_ready.emit(prepared_df)
             
             elif self.function_name == "filter_by_contains":
                 self.output.emit(f"\n--- Filter by Contains ---\n")
@@ -149,7 +196,8 @@ class WorkerThread(QThread):
             
             elif self.function_name == "display_all":
                 self.output.emit(f"\n--- All Data ---\n")
-                self.output.emit(self.format_df(self.parser.df))
+                prepared_df = self.prepare_df_for_table(self.parser.df)
+                self.table_ready.emit(prepared_df)
             
             else:
                 self.output.emit(f"Unknown function: {self.function_name}\n")
@@ -166,6 +214,7 @@ class ExcelParserGUI(QMainWindow):
         self.worker_thread = None
         self.current_df = None
         self.task_ids = None
+        self.strikethrough_rows = set()  # Track which rows have strikethrough applied
         self.init_ui()
     
     def init_ui(self):
@@ -246,13 +295,25 @@ class ExcelParserGUI(QMainWindow):
         output_label = QLabel("Analysis Output:")
         main_layout.addWidget(output_label)
         
+        # Create a splitter for logs and table
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        
+        # Text output for logs
         self.output_text = QTextEdit()
         self.output_text.setReadOnly(True)
-        # Set monospace font for proper table alignment
         monospace_font = QFont("Courier New", 9)
         monospace_font.setFixedPitch(True)
         self.output_text.setFont(monospace_font)
-        main_layout.addWidget(self.output_text)
+        self.output_text.setMaximumHeight(100)
+        splitter.addWidget(self.output_text)
+        
+        # Table widget for data display
+        self.table_widget = QTableWidget()
+        self.table_widget.setColumnCount(0)
+        self.table_widget.setRowCount(0)
+        splitter.addWidget(self.table_widget)
+        
+        main_layout.addWidget(splitter)
         
         # Set layout
         central_widget.setLayout(main_layout)
@@ -300,6 +361,7 @@ class ExcelParserGUI(QMainWindow):
         self.worker_thread = WorkerThread(filepath, selected_function)
         self.worker_thread.output.connect(self.append_output)
         self.worker_thread.error.connect(self.on_error)
+        self.worker_thread.table_ready.connect(self.on_table_ready)
         self.worker_thread.task_ids_ready.connect(self.on_task_ids_ready)
         self.worker_thread.data_loaded.connect(self.on_data_loaded)
         self.worker_thread.finished.connect(self.on_finished)
@@ -308,6 +370,64 @@ class ExcelParserGUI(QMainWindow):
     def append_output(self, text: str):
         """Append text to the output display"""
         self.output_text.append(text)
+    
+    def on_table_ready(self, df: pd.DataFrame):
+        """Populate the table with data and add checkbox column"""
+        if df is None or df.empty:
+            self.output_text.append("No data to display in table.\n")
+            return
+        
+        # Clear any strikethrough tracking and reset table
+        self.strikethrough_rows.clear()
+        
+        # Set table dimensions (add 1 for checkbox column)
+        self.table_widget.setRowCount(len(df))
+        self.table_widget.setColumnCount(len(df.columns) + 1)
+        
+        # Set column headers (including "Counted?" checkbox column)
+        headers = list(df.columns) + ["Counted?"]
+        self.table_widget.setHorizontalHeaderLabels(headers)
+        
+        # Populate table with data
+        for row_idx, (_, row_data) in enumerate(df.iterrows()):
+            for col_idx, col_name in enumerate(df.columns):
+                value = row_data[col_name]
+                cell_text = "" if pd.isna(value) else str(value)
+                item = QTableWidgetItem(cell_text)
+                self.table_widget.setItem(row_idx, col_idx, item)
+            
+            # Add checkbox in the last column
+            checkbox = QCheckBox()
+            checkbox.stateChanged.connect(lambda checked, r=row_idx: self.on_checkbox_changed(r, checked))
+            self.table_widget.setCellWidget(row_idx, len(df.columns), checkbox)
+        
+        self.table_widget.resizeColumnsToContents()
+        self.output_text.append(f"Table loaded with {len(df)} rows and {len(df.columns)} columns.\n")
+    
+    def on_checkbox_changed(self, row_idx: int, state):
+        """Handle checkbox state change - apply/remove strikethrough on row"""
+        is_checked = state == 2  # Qt.CheckState.Checked is 2
+        
+        if is_checked and row_idx not in self.strikethrough_rows:
+            # Apply strikethrough and red color
+            self.strikethrough_rows.add(row_idx)
+            for col_idx in range(self.table_widget.columnCount() - 1):  # Skip checkbox column
+                item = self.table_widget.item(row_idx, col_idx)
+                if item:
+                    font = item.font()
+                    font.setStrikeOut(True)
+                    item.setFont(font)
+                    item.setForeground(QColor("red"))
+        elif not is_checked and row_idx in self.strikethrough_rows:
+            # Remove strikethrough and restore black color
+            self.strikethrough_rows.discard(row_idx)
+            for col_idx in range(self.table_widget.columnCount() - 1):  # Skip checkbox column
+                item = self.table_widget.item(row_idx, col_idx)
+                if item:
+                    font = item.font()
+                    font.setStrikeOut(False)
+                    item.setFont(font)
+                    item.setForeground(QColor("white"))
     
     def on_error(self, error_msg: str):
         """Handle errors from worker thread"""
