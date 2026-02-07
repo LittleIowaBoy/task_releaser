@@ -1,11 +1,13 @@
 import sys
 import pandas as pd
 from pathlib import Path
+from typing import Dict
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTextEdit, QLabel, QComboBox, QMessageBox, QSplitter
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QFont
 from tr import ExcelParser
 
 
@@ -24,34 +26,54 @@ class WorkerThread(QThread):
         self.parser = None
 
     def format_df(self, df: pd.DataFrame) -> str:
-        """Format a DataFrame into an aligned table string similar to ExcelParser.display()."""
+        """Format a DataFrame into an aligned table string similar to ExcelParser.display().
+
+        This version keeps track of each column's maximum width while iterating
+        through rows, updating widths as wider values are encountered. Each column
+        is padded to match the widest value in that column.
+        
+        Columns matching certain names are automatically dropped before formatting.
+        """
         if df is None or df.empty:
             return "No data to display\n"
 
+        # Drop columns with specific names
+        columns_to_drop = ['Rsn Code', 'Tie']
+        df = df.drop(columns=[col for col in columns_to_drop if col in df.columns])
+        
         cols = list(df.columns)
         rows = []
+
+        # Initialize col widths with header widths
+        col_widths: Dict[str, int] = {c: len(str(c)) for c in cols}
+
+        # Build rows and update column widths on the fly
         for _, r in df.iterrows():
             row = ["" if pd.isna(r[c]) else str(r[c]) for c in cols]
             rows.append(row)
+            for i, val in enumerate(row):
+                col_name = cols[i]
+                if len(val) > col_widths[col_name]:
+                    col_widths[col_name] = len(val)
 
-        # Compute column widths
-        col_widths = {}
-        for i, c in enumerate(cols):
-            maxw = len(str(c))
-            for row in rows:
-                if len(row[i]) > maxw:
-                    maxw = len(row[i])
-            col_widths[c] = maxw
-
-        # Build header and separator
-        header_parts = [str(c).ljust(col_widths[c]) for c in cols]
+        # Build header and separator using the computed max widths
+        # Each header and separator must be exactly the same width as its column
+        header_parts = []
+        sep_parts = []
+        for c in cols:
+            width = col_widths[c]
+            header_parts.append(str(c).ljust(width))
+            sep_parts.append("-" * width)
+        
         header = " | ".join(header_parts)
-        sep_parts = ["-" * col_widths[c] for c in cols]
         separator = "-+-".join(sep_parts)
 
         lines = [header, separator]
         for row in rows:
-            row_parts = [row[i].ljust(col_widths[cols[i]]) for i in range(len(cols))]
+            row_parts = []
+            for i, val in enumerate(row):
+                width = col_widths[cols[i]]
+                row_parts.append(val.ljust(width))
             lines.append(" | ".join(row_parts))
 
         return "\n".join(lines) + "\n"
@@ -226,6 +248,10 @@ class ExcelParserGUI(QMainWindow):
         
         self.output_text = QTextEdit()
         self.output_text.setReadOnly(True)
+        # Set monospace font for proper table alignment
+        monospace_font = QFont("Courier New", 9)
+        monospace_font.setFixedPitch(True)
+        self.output_text.setFont(monospace_font)
         main_layout.addWidget(self.output_text)
         
         # Set layout

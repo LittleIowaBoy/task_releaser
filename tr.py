@@ -340,10 +340,11 @@ class ExcelParser:
             # For items in Task IDs that don't meet the condition, count how many Task IDs each item affects
             items_not_met_dict = {}
             if invalid_task_ids:
-                invalid_df = self.df[self.df[task_id_col].isin(invalid_task_ids)]
-                for item in invalid_df[item_col].unique():
-                    # Count how many unique Task IDs this item appears in (among invalid Task IDs)
-                    affected_task_ids = invalid_df[invalid_df[item_col] == item][task_id_col].unique()
+                # Only consider rows that do NOT meet the comparison (i.e., mask is False)
+                invalid_rows_df = self.df[~mask & self.df[task_id_col].isin(invalid_task_ids)]
+                for item in invalid_rows_df[item_col].unique():
+                    # Count how many unique Task IDs this item appears in among the failing rows
+                    affected_task_ids = invalid_rows_df[invalid_rows_df[item_col] == item][task_id_col].unique()
                     items_not_met_dict[item] = len(affected_task_ids)
             
             # Remove temporary column
