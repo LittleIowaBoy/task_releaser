@@ -101,6 +101,13 @@ class WorkerThread(QThread):
         columns_to_drop = ['Rsn Code', 'Tie', 'LOCN_CLASS', 'CYCLE_CNT_PENDING']
         df = df.drop(columns=[col for col in columns_to_drop if col in df.columns])
 
+        # Check if all expected columns are present and reorder them
+        expected_columns = ['Location', 'Item', 'Description', 'Current OHB', 'Last Replen', 'Last Replen Qty', 'Replen Location', 'Short Time', 'User']
+        if all(col in df.columns for col in expected_columns):
+            # Reorder columns in the specified order
+            desired_order = ['Location', 'Replen Location', 'Item', 'Description', 'Current OHB', 'Last Replen Qty', 'Last Replen', 'Short Time']
+            df = df[desired_order]
+
         # Sort by location column if present (numeric-aware sort ascending)
         # Check for different location column names
         location_columns = ['Location', 'Locn', 'DSP_LOCN']
@@ -125,15 +132,15 @@ class WorkerThread(QThread):
     
     def run(self):
         try:
-            self.output.emit(f"Loading file: {Path(self.filepath).name}\n")
+            #self.output.emit(f"Loading file: {Path(self.filepath).name}\n")
             self.parser = ExcelParser(self.filepath)
             self.parser.read_excel()
             
             if self.parser.df is not None:
                 self.output.emit(f"Successfully loaded CSV file with {len(self.parser.df)} rows and {len(self.parser.df.columns)} columns\n")
                 self.output.emit(f"Columns: {list(self.parser.df.columns)}\n")
-                self.output.emit("\nFirst few rows:\n")
-                self.output.emit(self.format_df(self.parser.df.head()))
+                #self.output.emit("\nFirst few rows:\n")
+                #self.output.emit(self.format_df(self.parser.df.head()))
                 
                 # Call the selected function
                 self.execute_selected_function()
@@ -219,7 +226,7 @@ class ExcelParserGUI(QMainWindow):
     
     def init_ui(self):
         """Initialize the user interface"""
-        self.setWindowTitle("Excel Parser GUI")
+        self.setWindowTitle("Lomar Inventory Control - DocuReader")
         self.setGeometry(100, 100, 1000, 600)
         
         # Create central widget
@@ -230,7 +237,7 @@ class ExcelParserGUI(QMainWindow):
         main_layout = QVBoxLayout()
         
         # Title
-        title = QLabel("Excel Parser Application")
+        title = QLabel("Inventory DocuReader")
         title_font = title.font()
         title_font.setPointSize(14)
         title_font.setBold(True)
@@ -242,7 +249,7 @@ class ExcelParserGUI(QMainWindow):
         
         # File selection section
         file_layout = QHBoxLayout()
-        file_layout.addWidget(QLabel("Select file from Downloads:"))
+        file_layout.addWidget(QLabel("Which file do you want?"))
         
         self.file_combo = QComboBox()
         self.populate_downloads_files()
@@ -252,14 +259,14 @@ class ExcelParserGUI(QMainWindow):
         
         # Function selection section
         function_layout = QHBoxLayout()
-        function_layout.addWidget(QLabel("Select function to execute:"))
+        function_layout.addWidget(QLabel("What do you need?"))
         
         self.function_combo = QComboBox()
-        self.function_combo.addItem("get_task_ids_where_condition", "get_task_ids_where_condition")
-        self.function_combo.addItem("filter_by_value", "filter_by_value")
-        self.function_combo.addItem("filter_by_range", "filter_by_range")
-        self.function_combo.addItem("filter_by_contains", "filter_by_contains")
-        self.function_combo.addItem("display_all", "display_all")
+        self.function_combo.addItem("Chase Tasks Needing Released", "get_task_ids_where_condition")
+        #self.function_combo.addItem("filter_by_value", "filter_by_value")
+        #self.function_combo.addItem("filter_by_range", "filter_by_range")
+        #self.function_combo.addItem("filter_by_contains", "filter_by_contains")
+        self.function_combo.addItem("The Whole Table", "display_all")
         
         function_layout.addWidget(self.function_combo)
         main_layout.addLayout(function_layout)
@@ -267,7 +274,7 @@ class ExcelParserGUI(QMainWindow):
         # Buttons layout
         button_layout = QHBoxLayout()
         
-        self.start_button = QPushButton("Analyze")
+        self.start_button = QPushButton("Analyze and Parse")
         self.start_button.clicked.connect(self.start_analysis)
         button_layout.addWidget(self.start_button)
         
@@ -353,6 +360,11 @@ class ExcelParserGUI(QMainWindow):
         self.file_combo.setEnabled(False)
         self.function_combo.setEnabled(False)
         self.refresh_button.setEnabled(False)
+        
+        # Clear the previous table
+        self.table_widget.setRowCount(0)
+        self.table_widget.setColumnCount(0)
+        self.strikethrough_rows.clear()
         
         self.status_label.setText("Processing... please wait")
         self.output_text.append("Starting analysis...\n")
@@ -455,8 +467,11 @@ class ExcelParserGUI(QMainWindow):
         self.output_text.append("\nAnalysis complete. You can start a new analysis or terminate the program.")
     
     def clear_output(self):
-        """Clear the output display"""
+        """Clear the output display and table"""
         self.output_text.clear()
+        self.table_widget.setRowCount(0)
+        self.table_widget.setColumnCount(0)
+        self.strikethrough_rows.clear()
         self.status_label.setText("Output cleared")
     
     def copy_to_clipboard(self):
