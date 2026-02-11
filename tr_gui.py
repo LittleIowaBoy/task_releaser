@@ -1,4 +1,5 @@
 import sys
+import re
 import pandas as pd
 from pathlib import Path
 from typing import Dict
@@ -119,10 +120,17 @@ class WorkerThread(QThread):
         
         if location_col:
             try:
-                # Strip any non-digit prefix (e.g., 'L-') and convert the remainder to numeric for sorting
+                # Strip only the first two characters, then sort alphabetically and numerically.
+                def sort_key(value: object) -> tuple[str, int]:
+                    stripped = re.sub(r'^.{2}', '', str(value))
+                    match = re.match(r'^([A-Za-z]*)(\d*)', stripped)
+                    alpha = match.group(1) if match else ''
+                    num = int(match.group(2)) if match and match.group(2) else -1
+                    return (alpha, num)
+
                 df = df.sort_values(
                     by=location_col,
-                    key=lambda s: pd.to_numeric(s.astype(str).str.replace(r'^\D+', '', regex=True), errors='coerce')
+                    key=lambda s: s.astype(str).map(sort_key)
                 )
             except Exception:
                 # Fallback to default lexicographic sort if unexpected errors occur
