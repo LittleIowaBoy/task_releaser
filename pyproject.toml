@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "docureader"
+version = "0.1.0"
+description = "Inventory DocuReader GUI and Excel parser utilities."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+keywords = ["inventory", "excel", "gui", "pandas", "pyqt"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business",
+]
+dependencies = [
+    "pandas>=2.0",
+    "PyQt6>=6.5",
+    "openpyxl>=3.1",
+    "xlrd>=2.0",
+]
+
+[project.scripts]
+docureader = "tr_gui:main"
+
+[tool.setuptools]
+py-modules = ["tr", "tr_gui"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+exclude = ["__pycache__*"]

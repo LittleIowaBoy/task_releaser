@@ -1,0 +1,12 @@
+LICENSE
+README.md
+pyproject.toml
+setup.py
+tr.py
+tr_gui.py
+docureader.egg-info/PKG-INFO
+docureader.egg-info/SOURCES.txt
+docureader.egg-info/dependency_links.txt
+docureader.egg-info/entry_points.txt
+docureader.egg-info/requires.txt
+docureader.egg-info/top_level.txt

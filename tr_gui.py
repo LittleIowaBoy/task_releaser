@@ -98,6 +98,8 @@ class WorkerThread(QThread):
         if df is None or df.empty:
             return df
 
+        df = df.copy()
+
         # Drop columns with specific names
         columns_to_drop = ['Rsn Code', 'Tie', 'LOCN_CLASS', 'CYCLE_CNT_PENDING']
         df = df.drop(columns=[col for col in columns_to_drop if col in df.columns])
@@ -106,7 +108,7 @@ class WorkerThread(QThread):
         expected_columns = ['Location', 'Item', 'Description', 'Current OHB', 'Last Replen', 'Last Replen Qty', 'Replen Location', 'Short Time', 'User']
         if all(col in df.columns for col in expected_columns):
             # Reorder columns in the specified order
-            desired_order = ['Location', 'Replen Location', 'Item', 'Description', 'Current OHB', 'Last Replen Qty', 'Last Replen', 'Short Time']
+            desired_order = ['Location', 'Replen Location', 'Item', 'Description', 'Current OHB', 'Last Replen Qty', 'Last Replen', 'Short Time', 'User']
             df = df[desired_order]
 
         # Sort by location column if present (numeric-aware sort ascending)
@@ -135,8 +137,44 @@ class WorkerThread(QThread):
             except Exception:
                 # Fallback to default lexicographic sort if unexpected errors occur
                 df = df.sort_values(by=location_col)
+
+        df = df.reset_index(drop=True)
+
+        row_highlights = [None] * len(df)
+        if 'Last Replen' in df.columns and 'Short Time' in df.columns:
+            last_replen = pd.to_datetime(df['Last Replen'], errors='coerce')
+            short_time = pd.to_datetime(df['Short Time'], errors='coerce')
+
+            after_mask = last_replen > short_time
+            before_mask = last_replen < short_time
+
+            for idx, is_after in enumerate(after_mask):
+                if is_after:
+                    row_highlights[idx] = {
+                        'Last Replen': 'darkgreen',
+                        'Short Time': 'darkgreen'
+                    }
+            for idx, is_before in enumerate(before_mask):
+                if is_before:
+                    highlight = {
+                        'Last Replen': 'darkyellow',
+                        'Short Time': 'darkyellow'
+                    }
+                    if 'Current OHB' in df.columns:
+                        try:
+                            current_ohb = float(df.at[idx, 'Current OHB'])
+                        except Exception:
+                            current_ohb = None
+                        if current_ohb is not None:
+                            if current_ohb <= 5:
+                                highlight['Current OHB'] = 'darkgreen'
+                            else:
+                                highlight['Current OHB'] = 'darkyellow'
+                    row_highlights[idx] = highlight
+
+        df.attrs['row_highlights'] = row_highlights
         
-        return df.reset_index(drop=True)
+        return df
     
     def run(self):
         try:
@@ -409,11 +447,31 @@ class ExcelParserGUI(QMainWindow):
         self.table_widget.setHorizontalHeaderLabels(headers)
         
         # Populate table with data
+        row_highlights = df.attrs.get('row_highlights')
+
         for row_idx, (_, row_data) in enumerate(df.iterrows()):
+            highlight = None
+            if isinstance(row_highlights, list) and row_idx < len(row_highlights):
+                highlight = row_highlights[row_idx]
+
+            if highlight == 'darkgreen':
+                row_color = QColor(130, 200, 150)
+            elif highlight == 'darkyellow':
+                row_color = QColor(230, 200, 90)
+            else:
+                row_color = None
+
             for col_idx, col_name in enumerate(df.columns):
                 value = row_data[col_name]
                 cell_text = "" if pd.isna(value) else str(value)
                 item = QTableWidgetItem(cell_text)
+                if isinstance(highlight, dict) and col_name in highlight:
+                    if highlight[col_name] == 'darkgreen':
+                        item.setBackground(QColor(130, 200, 150))
+                    elif highlight[col_name] == 'darkyellow':
+                        item.setBackground(QColor(230, 200, 90))
+                elif row_color is not None and col_name in ("Last Replen", "Short Time"):
+                    item.setBackground(row_color)
                 self.table_widget.setItem(row_idx, col_idx, item)
             
             # Add checkbox in the last column

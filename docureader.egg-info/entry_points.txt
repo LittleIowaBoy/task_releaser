@@ -1,0 +1,2 @@
+[console_scripts]
+docureader = tr_gui:main
