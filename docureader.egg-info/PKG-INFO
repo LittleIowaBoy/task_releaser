@@ -46,3 +46,25 @@ docureader
 
 ## Requirements
 - Python 3.10+
+
+## Build Windows executable and installer (cx_Freeze)
+
+Install build dependency:
+
+```bash
+pip install cx_Freeze
+```
+
+Create a bundled executable (includes Python interpreter + dependencies):
+
+```bash
+python freeze_setup.py build_exe
+```
+
+Create a Windows MSI installer wizard:
+
+```bash
+python freeze_setup.py bdist_msi
+```
+
+Build artifacts are written to `freeze_build/` and `dist/`.

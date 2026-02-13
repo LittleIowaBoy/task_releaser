@@ -36,4 +36,4 @@ py-modules = ["tr", "tr_gui"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-exclude = ["__pycache__*"]
+exclude = ["__pycache__*", "build*", "dist*", "freeze_build*"]

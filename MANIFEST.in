@@ -1,0 +1,7 @@
+recursive-exclude build *
+recursive-exclude freeze_build *
+recursive-exclude dist *
+recursive-exclude .venv *
+recursive-exclude __pycache__ *
+recursive-exclude *.egg-info *
+global-exclude .git*
