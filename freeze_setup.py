@@ -6,12 +6,16 @@ from cx_Freeze import Executable, setup
 BASE_DIR = Path(__file__).resolve().parent
 
 build_exe_options = {
-    "packages": ["pandas", "openpyxl", "xlrd", "PyQt6"],
+    "packages": [
+        "pandas",
+        "openpyxl",
+        "xlrd", 
+        "PyQt6",
+    ],
     "includes": ["tr", "tr_gui"],
     "excludes": ["tkinter", "unittest", "test", "build", "dist", "freeze_build"],
     "include_msvcr": False,
     "build_exe": str(BASE_DIR / "freeze_build" / "cx_freeze"),
-    "include_files": [],
 }
 
 msi_data = {
