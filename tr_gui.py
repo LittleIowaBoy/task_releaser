@@ -268,6 +268,11 @@ class ExcelParserGUI(QMainWindow):
         self.current_df = None
         self.task_ids = None
         self.strikethrough_rows = set()  # Track which rows have strikethrough applied
+        self.row_highlights = None  # Store row highlights for use in checkbox handler
+        self.table_row_map = None  # Map table row index to data row index
+        self.table_row_location_values = None  # Map table row index to location value
+        self.location_col = None  # Track location column for table grouping
+        self.bulk_checkbox_update = False  # Prevent recursive checkbox handling
         self.init_ui()
     
     def init_ui(self):
@@ -438,8 +443,42 @@ class ExcelParserGUI(QMainWindow):
         # Clear any strikethrough tracking and reset table
         self.strikethrough_rows.clear()
         
+        # Determine which location column to use for divider rows
+        location_columns = ['Location', 'Locn', 'DSP_LOCN']
+        location_col = None
+        for col in location_columns:
+            if col in df.columns:
+                location_col = col
+                break
+        self.location_col = location_col
+
+        # Build render rows with divider rows when location prefix changes
+        render_rows = []
+        self.table_row_map = []
+        self.table_row_location_values = []
+        prev_prefix = None
+        for df_idx, (_, row_data) in enumerate(df.iterrows()):
+            prefix = None
+            location_text = None
+            if location_col:
+                location_value = row_data.get(location_col)
+                location_text = "" if pd.isna(location_value) else str(location_value)
+                stripped = re.sub(r'^.{2}', '', location_text)
+                prefix = stripped[:2] if stripped else None
+
+            if location_col and prev_prefix is not None and prefix != prev_prefix:
+                render_rows.append({"type": "divider"})
+                self.table_row_map.append(None)
+                self.table_row_location_values.append(None)
+
+            render_rows.append({"type": "data", "df_idx": df_idx, "row_data": row_data})
+            self.table_row_map.append(df_idx)
+            self.table_row_location_values.append(location_text if location_col else None)
+            if location_col:
+                prev_prefix = prefix
+
         # Set table dimensions (add 1 for checkbox column)
-        self.table_widget.setRowCount(len(df))
+        self.table_widget.setRowCount(len(render_rows))
         self.table_widget.setColumnCount(len(df.columns) + 1)
         
         # Set column headers (including "Counted?" checkbox column)
@@ -447,12 +486,22 @@ class ExcelParserGUI(QMainWindow):
         self.table_widget.setHorizontalHeaderLabels(headers)
         
         # Populate table with data
-        row_highlights = df.attrs.get('row_highlights')
+        self.row_highlights = df.attrs.get('row_highlights')
 
-        for row_idx, (_, row_data) in enumerate(df.iterrows()):
+        for row_idx, render_row in enumerate(render_rows):
+            if render_row["type"] == "divider":
+                for col_idx in range(len(df.columns)):
+                    item = QTableWidgetItem("-----")
+                    item.setFlags(Qt.ItemFlag.NoItemFlags)
+                    item.setForeground(QColor("white"))
+                    self.table_widget.setItem(row_idx, col_idx, item)
+                continue
+
+            row_data = render_row["row_data"]
+            df_idx = render_row["df_idx"]
             highlight = None
-            if isinstance(row_highlights, list) and row_idx < len(row_highlights):
-                highlight = row_highlights[row_idx]
+            if isinstance(self.row_highlights, list) and df_idx < len(self.row_highlights):
+                highlight = self.row_highlights[df_idx]
 
             if highlight == 'darkgreen':
                 row_color = QColor(130, 200, 150)
@@ -468,12 +517,14 @@ class ExcelParserGUI(QMainWindow):
                 if isinstance(highlight, dict) and col_name in highlight:
                     if highlight[col_name] == 'darkgreen':
                         item.setBackground(QColor(130, 200, 150))
+                        item.setForeground(QColor("black"))
                     elif highlight[col_name] == 'darkyellow':
                         item.setBackground(QColor(230, 200, 90))
+                        item.setForeground(QColor("black"))
                 elif row_color is not None and col_name in ("Last Replen", "Short Time"):
                     item.setBackground(row_color)
                 self.table_widget.setItem(row_idx, col_idx, item)
-            
+
             # Add checkbox in the last column
             checkbox = QCheckBox()
             checkbox.stateChanged.connect(lambda checked, r=row_idx: self.on_checkbox_changed(r, checked))
@@ -484,7 +535,44 @@ class ExcelParserGUI(QMainWindow):
     
     def on_checkbox_changed(self, row_idx: int, state):
         """Handle checkbox state change - apply/remove strikethrough on row"""
+        if self.bulk_checkbox_update:
+            return
+
         is_checked = state == 2  # Qt.CheckState.Checked is 2
+
+        data_row_idx = None
+        if isinstance(self.table_row_map, list) and row_idx < len(self.table_row_map):
+            data_row_idx = self.table_row_map[row_idx]
+        if data_row_idx is None:
+            return
+
+        location_value = None
+        if isinstance(self.table_row_location_values, list) and row_idx < len(self.table_row_location_values):
+            location_value = self.table_row_location_values[row_idx]
+        if location_value is None:
+            return
+
+        self.bulk_checkbox_update = True
+        try:
+            for table_row_idx, row_location in enumerate(self.table_row_location_values):
+                if row_location != location_value:
+                    continue
+
+                checkbox = self.table_widget.cellWidget(table_row_idx, self.table_widget.columnCount() - 1)
+                if checkbox and checkbox.isChecked() != is_checked:
+                    checkbox.setChecked(is_checked)
+
+                self.apply_row_strikethrough(table_row_idx, is_checked)
+        finally:
+            self.bulk_checkbox_update = False
+
+    def apply_row_strikethrough(self, row_idx: int, is_checked: bool):
+        """Apply or remove strikethrough for a table row."""
+        data_row_idx = None
+        if isinstance(self.table_row_map, list) and row_idx < len(self.table_row_map):
+            data_row_idx = self.table_row_map[row_idx]
+        if data_row_idx is None:
+            return
         
         if is_checked and row_idx not in self.strikethrough_rows:
             # Apply strikethrough and red color
@@ -497,15 +585,31 @@ class ExcelParserGUI(QMainWindow):
                     item.setFont(font)
                     item.setForeground(QColor("red"))
         elif not is_checked and row_idx in self.strikethrough_rows:
-            # Remove strikethrough and restore black color
+            # Remove strikethrough and restore original formatting
             self.strikethrough_rows.discard(row_idx)
+            
+            # Get the highlight info for this row
+            highlight = None
+            if isinstance(self.row_highlights, list) and data_row_idx < len(self.row_highlights):
+                highlight = self.row_highlights[data_row_idx]
+            
             for col_idx in range(self.table_widget.columnCount() - 1):  # Skip checkbox column
                 item = self.table_widget.item(row_idx, col_idx)
                 if item:
                     font = item.font()
                     font.setStrikeOut(False)
                     item.setFont(font)
-                    item.setForeground(QColor("white"))
+                    
+                    # Get column name
+                    col_name = self.table_widget.horizontalHeaderItem(col_idx).text()
+                    
+                    # Restore text color: black for highlighted cells, white for others
+                    if isinstance(highlight, dict) and col_name in highlight:
+                        # This cell was highlighted, restore black text
+                        item.setForeground(QColor("black"))
+                    else:
+                        # This cell was not highlighted, use white text
+                        item.setForeground(QColor("white"))
     
     def on_error(self, error_msg: str):
         """Handle errors from worker thread"""
