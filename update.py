@@ -130,7 +130,7 @@ def create_backup(version: str) -> Path:
         backup_path.mkdir(exist_ok=True)
         
         # Backup build directory
-        build_dir = BASE_DIR / "freeze_build" / "DocuReader"
+        build_dir = BASE_DIR / "freeze_build" / "cx_freeze"
         if build_dir.exists():
             backup_build = backup_path / "DocuReader"
             if backup_build.exists():
@@ -154,7 +154,7 @@ def restore_backup(backup_path: Path) -> bool:
         
         # Restore build directory
         backup_build = backup_path / "DocuReader"
-        build_dir = BASE_DIR / "freeze_build" / "DocuReader"
+        build_dir = BASE_DIR / "freeze_build" / "cx_freeze"
         
         if backup_build.exists():
             if build_dir.exists():
@@ -240,7 +240,7 @@ def rebuild_executable(force: bool = False) -> bool:
 def validate_build() -> bool:
     """Validate that the new executable exists and runs"""
     try:
-        exe_path = BASE_DIR / "freeze_build" / "DocuReader" / "DocuReader.exe"
+        exe_path = BASE_DIR / "freeze_build" / "cx_freeze" / "DocuReader.exe"
         
         if not exe_path.exists():
             log_message(f"Executable not found: {exe_path}", "ERROR")
@@ -265,7 +265,7 @@ def create_portable_zip(version: str) -> bool:
         import zipfile
         
         zip_path = BASE_DIR / f"DocuReader-{version}-portable.zip"
-        build_dir = BASE_DIR / "freeze_build" / "DocuReader"
+        build_dir = BASE_DIR / "freeze_build" / "cx_freeze"
         
         if not build_dir.exists():
             log_message(f"Build directory not found: {build_dir}", "ERROR")
@@ -393,11 +393,11 @@ def main() -> int:
         if args.check_only:
             available, version = check_for_updates()
             if available:
-                print(f"\n✓ Update available: {version}")
+                print(f"\n[OK] Update available: {version}")
                 print(f"  Run 'python update.py' to install\n")
                 return 0
             else:
-                print("\n✓ Already on latest version\n")
+                print("\n[OK] Already on latest version\n")
                 return 0
         
         elif args.rollback:
@@ -406,42 +406,42 @@ def main() -> int:
             
             if not backups:
                 log_message("No backups available for rollback", "ERROR")
-                print("\n✗ No previous version to rollback to\n")
+                print("\n[ERROR] No previous version to rollback to\n")
                 return 1
             
             latest_backup = backups[-1]
             if restore_backup(latest_backup):
-                print(f"\n✓ Rollback successful\n")
+                print(f"\n[OK] Rollback successful\n")
                 return 0
             else:
-                print(f"\n✗ Rollback failed\n")
+                print(f"\n[ERROR] Rollback failed\n")
                 return 1
         
         else:
             # Full update
             available, version = check_for_updates()
             if not available:
-                print("\n✓ Already on latest version\n")
+                print("\n[OK] Already on latest version\n")
                 return 0
             
-            print(f"\n→ Update available: {version}")
+            print(f"\n-> Update available: {version}")
             print("  Starting update process...\n")
             
             if perform_update(force_rebuild=args.force_rebuild):
-                print(f"\n✓ Update completed successfully!")
+                print(f"\n[OK] Update completed successfully!")
                 print(f"  Restart application to apply updates\n")
                 return 0
             else:
-                print(f"\n✗ Update failed - see update.log for details\n")
+                print(f"\n[ERROR] Update failed - see update.log for details\n")
                 return 1
     
     except KeyboardInterrupt:
         log_message("Update interrupted by user", "WARNING")
-        print("\n○ Update cancelled\n")
+        print("\n[CANCELLED] Update cancelled\n")
         return 1
     except Exception as e:
         log_message(f"Unexpected error: {e}", "ERROR")
-        print(f"\n✗ Update failed: {e}\n")
+        print(f"\n[ERROR] Update failed: {e}\n")
         return 1
     
     finally:

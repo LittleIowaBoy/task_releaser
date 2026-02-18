@@ -1,6 +1,7 @@
 import sys
 import re
 import pandas as pd
+import subprocess
 from pathlib import Path
 from typing import Dict
 from PyQt6.QtWidgets import (
@@ -8,7 +9,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QTextEdit, QLabel, QComboBox, QMessageBox, QSplitter,
     QTableWidget, QTableWidgetItem, QCheckBox
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QProcess
 from PyQt6.QtGui import QFont, QTextDocument, QTextCursor, QColor
 from tr import ExcelParser
 
@@ -275,6 +276,7 @@ class ExcelParserGUI(QMainWindow):
         self.table_row_location_values = None  # Map table row index to location value
         self.location_col = None  # Track location column for table grouping
         self.bulk_checkbox_update = False  # Prevent recursive checkbox handling
+        self.update_process = None  # Track update process
         self.init_ui()
     
     def init_ui(self):
@@ -343,6 +345,11 @@ class ExcelParserGUI(QMainWindow):
         self.copy_button.clicked.connect(self.copy_to_clipboard)
         self.copy_button.setEnabled(False)
         button_layout.addWidget(self.copy_button)
+        
+        self.update_button = QPushButton("Check & Install Updates")
+        self.update_button.clicked.connect(self.check_for_updates)
+        self.update_button.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-weight: bold; }")
+        button_layout.addWidget(self.update_button)
         
         self.terminate_button = QPushButton("Terminate")
         self.terminate_button.clicked.connect(self.terminate_program)
@@ -653,6 +660,84 @@ class ExcelParserGUI(QMainWindow):
             QApplication.clipboard().setText(clipboard_text)
             self.status_label.setText(f"Copied {len(self.task_ids)} Task ID(s) to clipboard")
             self.output_text.append(f"\nCopied to clipboard: {clipboard_text}\n")
+    
+    def check_for_updates(self):
+        """Check for and automatically install application updates using update.py"""
+        # Confirm with user before proceeding
+        reply = QMessageBox.question(
+            self,
+            "Update Application",
+            "This will check for updates and automatically install them if available.\n\n"
+            "The application will need to be restarted after updating.\n\n"
+            "Do you want to continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes
+        )
+        
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        
+        self.output_text.append("\n" + "="*60 + "\n")
+        self.output_text.append("Checking for updates and installing if available...\n")
+        self.output_text.append("="*60 + "\n")
+        
+        # Disable update button during update
+        self.update_button.setEnabled(False)
+        self.update_button.setText("Updating...")
+        
+        # Create QProcess to run update.py (without --check-only flag for full update)
+        self.update_process = QProcess(self)
+        self.update_process.readyReadStandardOutput.connect(self.handle_update_output)
+        self.update_process.readyReadStandardError.connect(self.handle_update_error)
+        self.update_process.finished.connect(self.update_finished)
+        
+        # Run update.py without --check-only to perform full update
+        update_script = Path(__file__).parent / "update.py"
+        self.update_process.start(sys.executable, [str(update_script)])
+    
+    def handle_update_output(self):
+        """Handle stdout from update process"""
+        if self.update_process:
+            data = self.update_process.readAllStandardOutput()
+            output = bytes(data).decode('utf-8', errors='ignore')
+            self.output_text.append(output)
+    
+    def handle_update_error(self):
+        """Handle stderr from update process"""
+        if self.update_process:
+            data = self.update_process.readAllStandardError()
+            output = bytes(data).decode('utf-8', errors='ignore')
+            if output.strip():  # Only show non-empty errors
+                self.output_text.append(f"[ERROR] {output}")
+    
+    def update_finished(self, exit_code, exit_status):
+        """Handle update process completion"""
+        self.output_text.append("\n" + "="*60 + "\n")
+        if exit_code == 0:
+            self.output_text.append("Update completed successfully!\n")
+            self.output_text.append("\n** Please restart the application to use the new version **\n")
+            self.status_label.setText("Update complete - restart required")
+            
+            # Show dialog prompting user to restart
+            QMessageBox.information(
+                self,
+                "Update Complete",
+                "Update completed successfully!\n\n"
+                "Please close and restart the application to use the new version.",
+                QMessageBox.StandardButton.Ok
+            )
+        else:
+            self.output_text.append(f"Update process completed with exit code {exit_code}.\n")
+            if exit_code == 1:
+                self.output_text.append("(This may indicate you're already on the latest version)\n")
+            self.status_label.setText("Update check complete")
+        
+        # Re-enable update button
+        self.update_button.setEnabled(True)
+        self.update_button.setText("Check & Install Updates")
+        
+        # Cleanup
+        self.update_process = None
     
     def terminate_program(self):
         """Terminate the application"""
