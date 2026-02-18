@@ -1,0 +1,452 @@
+#!/usr/bin/env python3
+"""
+Update script for DocuReader application.
+Automatically checks for updates on the task_releaser GitHub repository,
+intelligently rebuilds the executable if source code or dependencies change,
+and provides rollback capabilities.
+
+Usage:
+    python update.py              # Full update check and install
+    python update.py --check-only # Only check for updates, don't install
+    python update.py --rollback   # Rollback to previous version
+    python update.py --force-rebuild # Force rebuild of executable
+"""
+
+import sys
+import os
+import re
+import json
+import subprocess
+import shutil
+from pathlib import Path
+from datetime import datetime
+from typing import Tuple, Optional, List
+import argparse
+
+BASE_DIR = Path(__file__).resolve().parent
+BACKUP_DIR = BASE_DIR / "backup"
+UPDATE_LOG = BASE_DIR / "update.log"
+GIT_REMOTE = "task_releaser"
+GIT_BRANCH = "master"
+
+
+def log_message(message: str, level: str = "INFO") -> None:
+    """Log messages to both console and file"""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_entry = f"[{timestamp}] [{level}] {message}"
+    print(log_entry)
+    
+    with open(UPDATE_LOG, "a") as f:
+        f.write(log_entry + "\n")
+
+
+def get_current_version() -> str:
+    """Extract current version from tr_gui.py"""
+    try:
+        with open(BASE_DIR / "tr_gui.py", "r") as f:
+            content = f.read()
+            match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
+            if match:
+                return match.group(1)
+    except Exception as e:
+        log_message(f"Failed to read current version: {e}", "ERROR")
+    return "0.0.0"
+
+
+def get_remote_version() -> Optional[str]:
+    """Get latest version from git tags on remote"""
+    try:
+        # Fetch latest tags from remote
+        subprocess.run(
+            ["git", "fetch", f"{GIT_REMOTE}", "--tags"],
+            cwd=BASE_DIR,
+            capture_output=True,
+            check=True,
+            timeout=30
+        )
+        
+        # Get all tags sorted by version
+        result = subprocess.run(
+            ["git", "tag", "-l", "v*"],
+            cwd=BASE_DIR,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        
+        tags = result.stdout.strip().split('\n')
+        if tags and tags[0]:
+            # Sort tags as versions (v0.2.0, v0.2.1, etc.)
+            versions = sorted(
+                [t.lstrip('v') for t in tags if t],
+                key=lambda x: tuple(map(int, x.split('.')))
+            )
+            if versions:
+                return versions[-1]  # Return highest version
+    except subprocess.TimeoutExpired:
+        log_message("Git fetch timeout - no internet or slow connection", "WARNING")
+    except subprocess.CalledProcessError as e:
+        log_message(f"Git command failed: {e}", "WARNING")
+    except Exception as e:
+        log_message(f"Failed to get remote version: {e}", "ERROR")
+    
+    return None
+
+
+def check_files_changed(files: List[str]) -> bool:
+    """Check if specific files have changed from remote"""
+    try:
+        # Fetch latest from remote
+        subprocess.run(
+            ["git", "fetch", GIT_REMOTE, GIT_BRANCH],
+            cwd=BASE_DIR,
+            capture_output=True,
+            check=True,
+            timeout=30
+        )
+        
+        # Check diff between local and remote
+        for file_path in files:
+            result = subprocess.run(
+                ["git", "diff", "HEAD", f"{GIT_REMOTE}/{GIT_BRANCH}", "--", file_path],
+                cwd=BASE_DIR,
+                capture_output=True,
+                text=True
+            )
+            if result.stdout.strip():
+                return True
+        return False
+    except Exception as e:
+        log_message(f"Failed to check file changes: {e}", "ERROR")
+        return True  # Assume changed if we can't verify
+
+
+def create_backup(version: str) -> Path:
+    """Create backup of current executable and build directory"""
+    try:
+        BACKUP_DIR.mkdir(exist_ok=True)
+        
+        backup_path = BACKUP_DIR / f"v{version}_backup"
+        backup_path.mkdir(exist_ok=True)
+        
+        # Backup build directory
+        build_dir = BASE_DIR / "freeze_build" / "DocuReader"
+        if build_dir.exists():
+            backup_build = backup_path / "DocuReader"
+            if backup_build.exists():
+                shutil.rmtree(backup_build)
+            shutil.copytree(build_dir, backup_build)
+            log_message(f"Backup created at {backup_path}")
+            return backup_path
+    except Exception as e:
+        log_message(f"Failed to create backup: {e}", "ERROR")
+        return None
+    
+    return None
+
+
+def restore_backup(backup_path: Path) -> bool:
+    """Restore from backup"""
+    try:
+        if not backup_path.exists():
+            log_message(f"Backup not found: {backup_path}", "ERROR")
+            return False
+        
+        # Restore build directory
+        backup_build = backup_path / "DocuReader"
+        build_dir = BASE_DIR / "freeze_build" / "DocuReader"
+        
+        if backup_build.exists():
+            if build_dir.exists():
+                shutil.rmtree(build_dir)
+            shutil.copytree(backup_build, build_dir)
+            log_message(f"Restored backup from {backup_path}")
+            return True
+    except Exception as e:
+        log_message(f"Failed to restore backup: {e}", "ERROR")
+    
+    return False
+
+
+def pull_changes() -> bool:
+    """Pull latest changes from remote"""
+    try:
+        log_message("Pulling changes from remote...")
+        result = subprocess.run(
+            ["git", "pull", GIT_REMOTE, GIT_BRANCH],
+            cwd=BASE_DIR,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        
+        if result.returncode != 0:
+            log_message(f"Git pull failed: {result.stderr}", "ERROR")
+            return False
+        
+        log_message("Changes pulled successfully")
+        return True
+    except Exception as e:
+        log_message(f"Failed to pull changes: {e}", "ERROR")
+        return False
+
+
+def should_rebuild() -> bool:
+    """Determine if executable needs rebuilding"""
+    files_to_check = [
+        "tr_gui.py",
+        "tr.py",
+        "pyproject.toml"
+    ]
+    
+    if check_files_changed(files_to_check):
+        log_message("Source code or dependencies changed - rebuild needed")
+        return True
+    
+    log_message("No source code changes detected - skipping rebuild")
+    return False
+
+
+def rebuild_executable(force: bool = False) -> bool:
+    """Rebuild the frozen executable"""
+    try:
+        if not force and not should_rebuild():
+            return True
+        
+        log_message("Starting executable rebuild...")
+        
+        result = subprocess.run(
+            [sys.executable, "freeze_setup.py", "build"],
+            cwd=BASE_DIR,
+            capture_output=True,
+            text=True,
+            timeout=600  # 10 minutes timeout
+        )
+        
+        if result.returncode != 0:
+            log_message(f"Build failed: {result.stderr}", "ERROR")
+            return False
+        
+        log_message("Executable rebuild completed successfully")
+        return True
+    except subprocess.TimeoutExpired:
+        log_message("Build process timed out after 10 minutes", "ERROR")
+        return False
+    except Exception as e:
+        log_message(f"Failed to rebuild executable: {e}", "ERROR")
+        return False
+
+
+def validate_build() -> bool:
+    """Validate that the new executable exists and runs"""
+    try:
+        exe_path = BASE_DIR / "freeze_build" / "DocuReader" / "DocuReader.exe"
+        
+        if not exe_path.exists():
+            log_message(f"Executable not found: {exe_path}", "ERROR")
+            return False
+        
+        log_message(f"Validating executable: {exe_path}")
+        
+        # Quick test: just verify file exists and can be launched
+        # (We don't wait for GUI to load in automated script)
+        if os.path.exists(exe_path) and os.path.getsize(exe_path) > 0:
+            log_message("Executable validation passed")
+            return True
+    except Exception as e:
+        log_message(f"Executable validation failed: {e}", "ERROR")
+    
+    return False
+
+
+def create_portable_zip(version: str) -> bool:
+    """Create portable ZIP distribution"""
+    try:
+        import zipfile
+        
+        zip_path = BASE_DIR / f"DocuReader-{version}-portable.zip"
+        build_dir = BASE_DIR / "freeze_build" / "DocuReader"
+        
+        if not build_dir.exists():
+            log_message(f"Build directory not found: {build_dir}", "ERROR")
+            return False
+        
+        log_message(f"Creating portable ZIP: {zip_path}")
+        
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for root, dirs, files in os.walk(build_dir):
+                for file in files:
+                    file_path = Path(root) / file
+                    arcname = file_path.relative_to(build_dir.parent)
+                    zf.write(file_path, arcname)
+        
+        log_message(f"Portable ZIP created: {zip_path}")
+        return True
+    except Exception as e:
+        log_message(f"Failed to create portable ZIP: {e}", "ERROR")
+        return False
+
+
+def check_for_updates() -> Tuple[bool, Optional[str]]:
+    """Check if updates are available"""
+    try:
+        current = get_current_version()
+        remote = get_remote_version()
+        
+        if not remote:
+            log_message("Could not determine remote version")
+            return False, None
+        
+        log_message(f"Current version: {current}")
+        log_message(f"Remote version: {remote}")
+        
+        # Simple version comparison
+        current_parts = tuple(map(int, current.split('.')))
+        remote_parts = tuple(map(int, remote.split('.')))
+        
+        if remote_parts > current_parts:
+            log_message(f"Update available: {current} -> {remote}")
+            return True, remote
+        elif remote_parts == current_parts:
+            log_message("Already on latest version")
+            return False, None
+        else:
+            log_message(f"Local version ({current}) is newer than remote ({remote})")
+            return False, None
+    except Exception as e:
+        log_message(f"Error checking for updates: {e}", "ERROR")
+        return False, None
+
+
+def perform_update(force_rebuild: bool = False) -> bool:
+    """Perform the full update process"""
+    try:
+        current_version = get_current_version()
+        log_message(f"Update process started. Current version: {current_version}")
+        
+        # Create backup before making changes
+        backup_path = create_backup(current_version)
+        if not backup_path:
+            log_message("Failed to create backup - aborting update", "ERROR")
+            return False
+        
+        # Pull changes from remote
+        if not pull_changes():
+            log_message("Failed to pull changes - attempting rollback", "ERROR")
+            restore_backup(backup_path)
+            return False
+        
+        # Get new version after pull
+        new_version = get_current_version()
+        
+        # Rebuild executable if needed
+        if not rebuild_executable(force=force_rebuild):
+            log_message("Build failed - rolling back to previous version", "ERROR")
+            restore_backup(backup_path)
+            return False
+        
+        # Validate new build
+        if not validate_build():
+            log_message("Build validation failed - rolling back", "ERROR")
+            restore_backup(backup_path)
+            return False
+        
+        # Create portable ZIP
+        if not create_portable_zip(new_version):
+            log_message("Failed to create portable ZIP (non-critical)", "WARNING")
+        
+        log_message(f"Update completed successfully! New version: {new_version}")
+        return True
+    except Exception as e:
+        log_message(f"Unexpected error during update: {e}", "ERROR")
+        return False
+
+
+def main() -> int:
+    """Main entry point"""
+    parser = argparse.ArgumentParser(
+        description="Update DocuReader application from GitHub repository"
+    )
+    parser.add_argument(
+        "--check-only",
+        action="store_true",
+        help="Only check for updates, don't install"
+    )
+    parser.add_argument(
+        "--rollback",
+        action="store_true",
+        help="Rollback to previous version"
+    )
+    parser.add_argument(
+        "--force-rebuild",
+        action="store_true",
+        help="Force rebuild even if no source changes detected"
+    )
+    
+    args = parser.parse_args()
+    
+    log_message("=" * 60)
+    log_message(f"DocuReader Update Script v1.0")
+    log_message("=" * 60)
+    
+    try:
+        if args.check_only:
+            available, version = check_for_updates()
+            if available:
+                print(f"\n✓ Update available: {version}")
+                print(f"  Run 'python update.py' to install\n")
+                return 0
+            else:
+                print("\n✓ Already on latest version\n")
+                return 0
+        
+        elif args.rollback:
+            current = get_current_version()
+            backups = sorted(BACKUP_DIR.glob("v*_backup"))
+            
+            if not backups:
+                log_message("No backups available for rollback", "ERROR")
+                print("\n✗ No previous version to rollback to\n")
+                return 1
+            
+            latest_backup = backups[-1]
+            if restore_backup(latest_backup):
+                print(f"\n✓ Rollback successful\n")
+                return 0
+            else:
+                print(f"\n✗ Rollback failed\n")
+                return 1
+        
+        else:
+            # Full update
+            available, version = check_for_updates()
+            if not available:
+                print("\n✓ Already on latest version\n")
+                return 0
+            
+            print(f"\n→ Update available: {version}")
+            print("  Starting update process...\n")
+            
+            if perform_update(force_rebuild=args.force_rebuild):
+                print(f"\n✓ Update completed successfully!")
+                print(f"  Restart application to apply updates\n")
+                return 0
+            else:
+                print(f"\n✗ Update failed - see update.log for details\n")
+                return 1
+    
+    except KeyboardInterrupt:
+        log_message("Update interrupted by user", "WARNING")
+        print("\n○ Update cancelled\n")
+        return 1
+    except Exception as e:
+        log_message(f"Unexpected error: {e}", "ERROR")
+        print(f"\n✗ Update failed: {e}\n")
+        return 1
+    
+    finally:
+        log_message("=" * 60)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

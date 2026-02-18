@@ -12,8 +12,6 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QTextDocument, QTextCursor, QColor
 from tr import ExcelParser
 
-__version__ = "0.2.0"
-
 
 class WorkerThread(QThread):
     """Worker thread to run the parser without blocking the GUI"""
@@ -279,7 +277,7 @@ class ExcelParserGUI(QMainWindow):
     
     def init_ui(self):
         """Initialize the user interface"""
-        self.setWindowTitle(f"Lomar Inventory Control - DocuReader v{__version__}")
+        self.setWindowTitle("Lomar Inventory Control - DocuReader")
         self.setGeometry(100, 100, 1000, 600)
         
         # Create central widget
