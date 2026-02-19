@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from cx_Freeze import Executable, setup
@@ -54,9 +55,15 @@ executables = [
     )
 ]
 
+# Read version from tr_gui.py
+with open(BASE_DIR / "tr_gui.py", "r") as f:
+    content = f.read()
+    match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
+    version = match.group(1) if match else "0.0.0"
+
 setup(
     name="docureader",
-    version="0.1.0",
+    version=version,
     description="Inventory DocuReader GUI and Excel parser utilities.",
     options={
         "build_exe": build_exe_options,
