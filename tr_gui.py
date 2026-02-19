@@ -124,13 +124,32 @@ class WorkerThread(QThread):
         
         if location_col:
             try:
-                # Strip only the first two characters, then sort alphabetically and numerically.
-                def sort_key(value: object) -> tuple[str, int]:
-                    stripped = re.sub(r'^.{2}', '', str(value))
-                    match = re.match(r'^([A-Za-z]*)(\d*)', stripped)
-                    alpha = match.group(1) if match else ''
-                    num = int(match.group(2)) if match and match.group(2) else -1
-                    return (alpha, num)
+                # Sort location values using prefix, numeric body, and trailing suffix.
+                # Suffixed values are integrated into numeric order so a value like
+                # "L-180111X" can appear at the beginning of the 18* section (before
+                # "L-1801311") while still sorting after prior sections (e.g., 17*).
+                # "L-180111Y" will sort after "L-180111X" but before "L-1801311". Values without a numeric
+                # portion will be placed at the end of their respective prefix section.
+                def sort_key(value: object) -> tuple:
+                    text = "" if pd.isna(value) else str(value).strip().upper()
+                    match = re.match(r'^(\D*?)(\d+)?(\D*)$', text)
+                    if not match:
+                        return (text, float('inf'), 1, text)
+
+                    prefix, number_part, suffix = match.groups()
+                    if number_part:
+                        # If a suffix is present and the numeric portion is shorter than
+                        # standard location width, pad with trailing zeros so it sorts as
+                        # the leading bin in that numeric section.
+                        if suffix and len(number_part) < 7:
+                            number = int(number_part.ljust(7, '0'))
+                        else:
+                            number = int(number_part)
+                    else:
+                        number = float('inf')
+
+                    has_suffix = 1 if suffix else 0
+                    return (prefix, number, has_suffix, suffix)
 
                 df = df.sort_values(
                     by=location_col,
