@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Build outputs
+build/
+dist/
+freeze_build/
+*.egg-info/
+
+# Backups
+backup/
+
+# Distribution packages
+*.zip
+*.tar.gz
+*.whl
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+update.log
+
+# Test files
+.pytest_cache/
+.coverage
+htmlcov/
