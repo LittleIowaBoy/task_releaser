@@ -1,0 +1,230 @@
+[2026-02-18 10:09:02] [INFO] ============================================================
+[2026-02-18 10:09:02] [INFO] DocuReader Update Script v1.0
+[2026-02-18 10:09:02] [INFO] ============================================================
+[2026-02-18 10:09:05] [INFO] Current version: 0.2.0
+[2026-02-18 10:09:05] [INFO] Remote version: 0.2.0
+[2026-02-18 10:09:05] [INFO] Already on latest version
+[2026-02-18 10:09:05] [INFO] ============================================================
+[2026-02-18 10:44:00] [INFO] ============================================================
+[2026-02-18 10:44:00] [INFO] DocuReader Update Script v1.0
+[2026-02-18 10:44:00] [INFO] ============================================================
+[2026-02-18 10:44:04] [INFO] Current version: 0.2.0
+[2026-02-18 10:44:04] [INFO] Remote version: 0.2.2
+[2026-02-18 10:44:04] [INFO] Update available: 0.2.0 -> 0.2.2
+[2026-02-18 10:44:04] [INFO] Update process started. Current version: 0.2.0
+[2026-02-18 10:44:56] [INFO] Backup created at C:\Users\H1450755\main\work_projects\backup\v0.2.0_backup
+[2026-02-18 10:44:56] [INFO] Pulling changes from remote...
+[2026-02-18 10:44:59] [INFO] Changes pulled successfully
+[2026-02-18 10:45:04] [INFO] No source code changes detected - skipping rebuild
+[2026-02-18 10:45:04] [INFO] Validating executable: C:\Users\H1450755\main\work_projects\freeze_build\DocuReader\DocuReader.exe
+[2026-02-18 10:45:04] [INFO] Executable validation passed
+[2026-02-18 10:45:04] [INFO] Creating portable ZIP: C:\Users\H1450755\main\work_projects\DocuReader-0.2.0-portable.zip
+[2026-02-18 10:46:18] [INFO] Portable ZIP created: C:\Users\H1450755\main\work_projects\DocuReader-0.2.0-portable.zip
+[2026-02-18 10:46:18] [INFO] Update completed successfully! New version: 0.2.0
+[2026-02-18 10:46:18] [INFO] ============================================================
+[2026-02-18 10:57:26] [INFO] ============================================================
+[2026-02-18 10:57:26] [INFO] DocuReader Update Script v1.0
+[2026-02-18 10:57:26] [INFO] ============================================================
+[2026-02-18 10:57:28] [INFO] Current version: 0.2.0
+[2026-02-18 10:57:28] [INFO] Remote version: 0.2.2
+[2026-02-18 10:57:28] [INFO] Update available: 0.2.0 -> 0.2.2
+[2026-02-18 10:57:28] [ERROR] Unexpected error: 'charmap' codec can't encode character '\u2713' in position 2: character maps to <undefined>
+[2026-02-18 10:57:28] [INFO] ============================================================
+[2026-02-18 11:04:59] [INFO] ============================================================
+[2026-02-18 11:04:59] [INFO] DocuReader Update Script v1.0
+[2026-02-18 11:04:59] [INFO] ============================================================
+[2026-02-18 11:05:01] [INFO] Current version: 0.2.0
+[2026-02-18 11:05:01] [INFO] Remote version: 0.2.2
+[2026-02-18 11:05:01] [INFO] Update available: 0.2.0 -> 0.2.2
+[2026-02-18 11:05:01] [INFO] ============================================================
+[2026-02-18 11:09:02] [INFO] ============================================================
+[2026-02-18 11:09:02] [INFO] DocuReader Update Script v1.0
+[2026-02-18 11:09:02] [INFO] ============================================================
+[2026-02-18 11:09:04] [INFO] Current version: 0.2.0
+[2026-02-18 11:09:04] [INFO] Remote version: 0.2.2
+[2026-02-18 11:09:04] [INFO] Update available: 0.2.0 -> 0.2.2
+[2026-02-18 11:09:04] [INFO] Update process started. Current version: 0.2.0
+[2026-02-18 11:09:53] [INFO] Backup created at C:\Users\H1450755\main\work_projects\backup\v0.2.0_backup
+[2026-02-18 11:09:53] [INFO] Pulling changes from remote...
+[2026-02-18 11:09:56] [INFO] Changes pulled successfully
+[2026-02-18 11:09:59] [INFO] No source code changes detected - skipping rebuild
+[2026-02-18 11:09:59] [INFO] Validating executable: C:\Users\H1450755\main\work_projects\freeze_build\DocuReader\DocuReader.exe
+[2026-02-18 11:09:59] [INFO] Executable validation passed
+[2026-02-18 11:09:59] [INFO] Creating portable ZIP: C:\Users\H1450755\main\work_projects\DocuReader-0.2.0-portable.zip
+[2026-02-18 11:10:43] [INFO] Portable ZIP created: C:\Users\H1450755\main\work_projects\DocuReader-0.2.0-portable.zip
+[2026-02-18 11:10:43] [INFO] Update completed successfully! New version: 0.2.0
+[2026-02-18 11:10:43] [INFO] ============================================================
+[2026-02-19 11:21:05] [INFO] ============================================================
+[2026-02-19 11:21:05] [INFO] DocuReader Update Script v1.0
+[2026-02-19 11:21:05] [INFO] ============================================================
+[2026-02-19 11:21:08] [INFO] Current version: 0.2.0
+[2026-02-19 11:21:08] [INFO] Remote version: 0.2.2
+[2026-02-19 11:21:08] [INFO] Update available: 0.2.0 -> 0.2.2
+[2026-02-19 11:21:08] [INFO] ============================================================
+[2026-02-19 11:23:36] [INFO] ============================================================
+[2026-02-19 11:23:36] [INFO] DocuReader Update Script v1.0
+[2026-02-19 11:23:36] [INFO] ============================================================
+[2026-02-19 11:23:39] [INFO] Current version: 0.2.0
+[2026-02-19 11:23:39] [INFO] Remote version: 0.2.2
+[2026-02-19 11:23:39] [INFO] Update available: 0.2.0 -> 0.2.2
+[2026-02-19 11:23:39] [INFO] Update process started. Current version: 0.2.0
+[2026-02-19 11:24:24] [INFO] ============================================================
+[2026-02-19 11:24:24] [INFO] DocuReader Update Script v1.0
+[2026-02-19 11:24:24] [INFO] ============================================================
+[2026-02-19 11:24:27] [INFO] Current version: 0.2.0
+[2026-02-19 11:24:27] [INFO] Remote version: 0.2.2
+[2026-02-19 11:24:27] [INFO] Update available: 0.2.0 -> 0.2.2
+[2026-02-19 11:24:27] [INFO] Update process started. Current version: 0.2.0
+[2026-02-19 11:24:35] [ERROR] Failed to create backup: [WinError 145] The directory is not empty: 'C:\\Users\\H1450755\\main\\work_projects\\backup\\v0.2.0_backup\\DocuReader\\lib\\PyQt6\\Qt6\\qml'
+[2026-02-19 11:24:35] [ERROR] Failed to create backup - aborting update
+[2026-02-19 11:24:35] [INFO] ============================================================
+[2026-02-19 11:24:42] [INFO] Backup created at C:\Users\H1450755\main\work_projects\backup\v0.2.0_backup
+[2026-02-19 11:24:44] [INFO] Syncing repository to release tag: v0.2.2
+[2026-02-19 11:25:25] [INFO] Repository synced to v0.2.2
+[2026-02-19 11:25:25] [WARNING] Version mismatch after sync. Expected: 0.2.2, Actual: 0.0.0
+[2026-02-19 11:25:29] [INFO] Source code or dependencies changed - rebuild needed
+[2026-02-19 11:25:29] [INFO] Starting executable rebuild...
+[2026-02-19 11:26:17] [ERROR] Build failed: C:\Users\H1450755\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\setuptools\config\_apply_pyprojecttoml.py:82: SetuptoolsDeprecationWarning: `project.license` as a TOML table is deprecated
+!!
+
+        ********************************************************************************
+        Please use a simple string containing a SPDX expression for `project.license`. You can also use `project.license-files`. (Both options available on setuptools>=77.0.0).
+
+        By 2027-Feb-18, you need to update your project and remove deprecated calls
+        or your builds will no longer be supported.
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  corresp(dist, value, root_dir)
+C:\Users\H1450755\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\setuptools\config\_apply_pyprojecttoml.py:61: SetuptoolsDeprecationWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  dist._finalize_license_expression()
+C:\Users\H1450755\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\setuptools\dist.py:765: SetuptoolsDeprecationWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  self._finalize_license_expression()
+warning: no previously-included files matching '*' found under directory 'build'
+warning: no previously-included files matching '*' found under directory 'freeze_build'
+warning: no previously-included files matching '*' found under directory 'dist'
+warning: no previously-included files matching '*' found under directory '.venv'
+warning: no previously-included files matching '*' found under directory '__pycache__'
+warning: no previously-included files matching '.git*' found anywhere in distribution
+Traceback (most recent call last):
+  File "C:\Users\H1450755\main\work_projects\freeze_setup.py", line 57, in <module>
+    setup(
+    ~~~~~^
+        name="docureader",
+        ^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+        executables=executables,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\H1450755\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\cx_Freeze\__init__.py", line 70, in setup
+    return setuptools.setup(**attrs)
+           ~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "C:\Users\H1450755\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\setuptools\__init__.py", line 117, in setup
+    return distutils.core.setup(**attrs)  # type: ignore[return-value]
+           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "C:\Users\H1450755\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\setuptools\_distutils\core.py", line 186, in setup
+    return run_commands(dist)
+  File "C:\Users\H1450755\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\setuptools\_distutils\core.py", line 202, in run_commands
+    dist.run_commands()
+    ~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\H1450755\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\setuptools\_distutils\dist.py", line 1002, in run_commands
+    self.run_command(cmd)
+    ~~~~~~~~~~~~~~~~^^^^^
+  File "C:\Users\H1450755\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\setuptools\dist.py", line 1107, in run_command
+    super().run_command(command)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "C:\Users\H1450755\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\setuptools\_distutils\dist.py", line 1021, in run_command
+    cmd_obj.run()
+    ~~~~~~~~~~~^^
+  File "C:\Users\H1450755\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\setuptools\_distutils\command\build.py", line 135, in run
+    self.run_command(cmd_name)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\H1450755\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\setuptools\_distutils\cmd.py", line 357, in run_command
+    self.distribution.run_command(command)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "C:\Users\H1450755\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\setuptools\dist.py", line 1107, in run_command
+    super().run_command(command)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "C:\Users\H1450755\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\setuptools\_distutils\dist.py", line 1021, in run_command
+    cmd_obj.run()
+    ~~~~~~~~~~~^^
+  File "C:\Users\H1450755\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\cx_Freeze\command\build_exe.py", line 305, in run
+    freezer: Freezer = Freezer(
+                       ~~~~~~~^
+        executables,
+        ^^^^^^^^^^^^
+    ...<21 lines>...
+        zip_filename=self.zip_filename,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\H1450755\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\cx_Freeze\freezer.py", line 897, in __init__
+    Freezer.__init__(self, *args, **kwargs)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\H1450755\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\cx_Freeze\freezer.py", line 188, in __init__
+    self.finder: ModuleFinder = self._get_module_finder()
+                                ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\H1450755\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\cx_Freeze\freezer.py", line 447, in _get_module_finder
+    finder.include_package(name)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\H1450755\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\cx_Freeze\finder.py", line 768, in include_package
+    module = self._import_module(name, deferred_imports)
+  File "C:\Users\H1450755\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\cx_Freeze\finder.py", line 300, in _import_module
+    raise ImportError(msg)
+ImportError: No module named 'openpyxl'
+
+[2026-02-19 11:26:17] [ERROR] Build failed - rolling back to previous version
+[2026-02-19 11:26:26] [INFO] Restored backup from C:\Users\H1450755\main\work_projects\backup\v0.2.0_backup
+[2026-02-19 11:26:26] [INFO] ============================================================
+[2026-02-19 11:28:18] [INFO] ============================================================
+[2026-02-19 11:28:18] [INFO] DocuReader Update Script v1.0
+[2026-02-19 11:28:18] [INFO] ============================================================
+[2026-02-19 11:28:21] [INFO] Current version: 0.0.0
+[2026-02-19 11:28:21] [INFO] Remote version: 0.2.2
+[2026-02-19 11:28:21] [INFO] Update available: 0.0.0 -> 0.2.2
+[2026-02-19 11:28:21] [INFO] Update process started. Current version: 0.0.0
+[2026-02-19 11:28:30] [INFO] Backup created at C:\Users\H1450755\main\work_projects\backup\v0.0.0_backup_20260219_112821_169598
+[2026-02-19 11:28:32] [INFO] Syncing repository to release tag: v0.2.2
+[2026-02-19 11:28:34] [INFO] Repository synced to v0.2.2
+[2026-02-19 11:28:34] [WARNING] Version mismatch after sync. Expected: 0.2.2, Actual: 0.0.0
+[2026-02-19 11:28:35] [WARNING] Update interrupted by user
+[2026-02-19 11:28:35] [INFO] ============================================================
+[2026-02-19 11:44:12] [INFO] ============================================================
+[2026-02-19 11:44:12] [INFO] DocuReader Update Script v1.0
+[2026-02-19 11:44:12] [INFO] ============================================================
+[2026-02-19 11:44:14] [INFO] Current version: 0.2.2
+[2026-02-19 11:44:14] [INFO] Remote version: 0.2.2
+[2026-02-19 11:44:14] [INFO] Already on latest version
+[2026-02-19 11:44:14] [INFO] ============================================================
+[2026-02-19 11:49:45] [INFO] ============================================================
+[2026-02-19 11:49:45] [INFO] DocuReader Update Script v1.0
+[2026-02-19 11:49:45] [INFO] ============================================================
+[2026-02-19 11:49:47] [INFO] Current version: 0.2.2
+[2026-02-19 11:49:47] [INFO] Remote version: 0.2.2
+[2026-02-19 11:49:47] [INFO] Already on latest version
+[2026-02-19 11:49:47] [INFO] ============================================================
