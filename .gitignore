@@ -1,10 +1,14 @@
-
-DocuReader-0.2.0-portable.zip
-*.zip
+﻿# Build artifacts and cache
 __pycache__/
 build/
 *.egg-info/
 freeze_build/
+
+# Distribution files
+*.zip
+
+# Logs
 *.log
 
-DocuReader-0.2.0-portable.zip
+# Backup files
+backup/
