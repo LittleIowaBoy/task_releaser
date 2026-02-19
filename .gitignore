@@ -1,0 +1,10 @@
+
+DocuReader-0.2.0-portable.zip
+*.zip
+__pycache__/
+build/
+*.egg-info/
+freeze_build/
+*.log
+
+DocuReader-0.2.0-portable.zip
