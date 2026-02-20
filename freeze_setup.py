@@ -1,10 +1,21 @@
 import re
+import sys
+from importlib.util import find_spec
 from pathlib import Path
 
 from cx_Freeze import Executable, setup
 
 
 BASE_DIR = Path(__file__).resolve().parent
+
+if len(sys.argv) <= 1:
+    print("Usage: python freeze_setup.py <command>")
+    print("")
+    print("Common commands:")
+    print("  python freeze_setup.py build")
+    print("  python freeze_setup.py bdist_msi")
+    print("  python freeze_setup.py --help")
+    sys.exit(2)
 
 build_exe_options = {
     "packages": [
@@ -18,6 +29,34 @@ build_exe_options = {
     "include_msvcr": False,
     "build_exe": str(BASE_DIR / "freeze_build" / "cx_freeze"),
 }
+
+
+def should_validate_dependencies(argv: list[str]) -> bool:
+    build_commands = {"build", "build_exe", "bdist_msi"}
+    commands = [arg for arg in argv[1:] if not arg.startswith("-")]
+    return any(command in build_commands for command in commands)
+
+
+def validate_dependencies(package_names: list[str]) -> list[str]:
+    missing = []
+    for package_name in package_names:
+        if find_spec(package_name) is None:
+            missing.append(package_name)
+    return missing
+
+
+if should_validate_dependencies(sys.argv):
+    missing_packages = validate_dependencies(build_exe_options["packages"])
+    if missing_packages:
+        print("Missing required build dependencies:")
+        for package_name in missing_packages:
+            print(f"  - {package_name}")
+        print("")
+        print(
+            "Install them in this Python environment, for example:"
+        )
+        print(f"  python -m pip install {' '.join(missing_packages)}")
+        sys.exit(2)
 
 msi_data = {
     "Shortcut": [

@@ -43,6 +43,8 @@ pip install cx_Freeze
 python freeze_setup.py build
 ```
 
+Note: running `python freeze_setup.py` without a command exits with usage guidance.
+
 Build output:
 - `freeze_build/cx_freeze/DocuReader.exe`
 - `freeze_build/cx_freeze/update.exe`
