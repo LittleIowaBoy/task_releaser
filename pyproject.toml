@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "docureader"
-version = "0.2.0"
+version = "0.2.3"
 description = "Inventory DocuReader GUI and Excel parser utilities."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -30,9 +30,10 @@ dependencies = [
 
 [project.scripts]
 docureader = "tr_gui:main"
+docureader-update = "update:main"
 
 [tool.setuptools]
-py-modules = ["tr", "tr_gui"]
+py-modules = ["tr", "tr_gui", "update"]
 
 [tool.setuptools.packages.find]
 where = ["."]

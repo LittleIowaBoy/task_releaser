@@ -29,6 +29,8 @@ GIT_REMOTE = "task_releaser"
 GIT_BRANCH = "master"
 TAG_PREFIX = "v"
 BUILD_DIR = BASE_DIR / "freeze_build" / "cx_freeze"
+ACTIVE_GIT_REMOTE: Optional[str] = None
+ACTIVE_GIT_BRANCH: Optional[str] = None
 
 
 def log_message(message: str, level: str = "INFO") -> None:
@@ -39,6 +41,111 @@ def log_message(message: str, level: str = "INFO") -> None:
     
     with open(UPDATE_LOG, "a", encoding="utf-8", errors="replace") as f:
         f.write(log_entry + "\n")
+
+
+def resolve_git_remote() -> Optional[str]:
+    """Resolve remote name with fallback: configured remote, origin, then first available."""
+    global ACTIVE_GIT_REMOTE
+
+    if ACTIVE_GIT_REMOTE:
+        return ACTIVE_GIT_REMOTE
+
+    try:
+        result = subprocess.run(
+            ["git", "remote"],
+            cwd=BASE_DIR,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode != 0:
+            log_message("Unable to list git remotes", "ERROR")
+            return None
+
+        remotes = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        if not remotes:
+            log_message("No git remotes configured", "ERROR")
+            return None
+
+        for candidate in (GIT_REMOTE, "origin"):
+            if candidate in remotes:
+                ACTIVE_GIT_REMOTE = candidate
+                if candidate != GIT_REMOTE:
+                    log_message(f"Configured remote '{GIT_REMOTE}' not found; using '{candidate}'", "WARNING")
+                return ACTIVE_GIT_REMOTE
+
+        ACTIVE_GIT_REMOTE = remotes[0]
+        log_message(
+            f"Configured remote '{GIT_REMOTE}' not found; using first available remote '{ACTIVE_GIT_REMOTE}'",
+            "WARNING"
+        )
+        return ACTIVE_GIT_REMOTE
+    except Exception as e:
+        log_message(f"Failed to resolve git remote: {e}", "ERROR")
+        return None
+
+
+def resolve_git_branch(remote: str) -> Optional[str]:
+    """Resolve branch with fallback: configured branch, main, then first available remote branch."""
+    global ACTIVE_GIT_BRANCH
+
+    if ACTIVE_GIT_BRANCH:
+        return ACTIVE_GIT_BRANCH
+
+    try:
+        result = subprocess.run(
+            ["git", "ls-remote", "--heads", remote],
+            cwd=BASE_DIR,
+            capture_output=True,
+            text=True,
+            timeout=20
+        )
+        if result.returncode != 0:
+            log_message(
+                f"Unable to list remote branches for '{remote}'; defaulting to '{GIT_BRANCH}'",
+                "WARNING"
+            )
+            ACTIVE_GIT_BRANCH = GIT_BRANCH
+            return ACTIVE_GIT_BRANCH
+
+        branches: List[str] = []
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            ref = parts[1].strip()
+            prefix = "refs/heads/"
+            if ref.startswith(prefix):
+                branches.append(ref[len(prefix):])
+
+        if not branches:
+            log_message(
+                f"No remote branches detected for '{remote}'; defaulting to '{GIT_BRANCH}'",
+                "WARNING"
+            )
+            ACTIVE_GIT_BRANCH = GIT_BRANCH
+            return ACTIVE_GIT_BRANCH
+
+        for candidate in (GIT_BRANCH, "main"):
+            if candidate in branches:
+                ACTIVE_GIT_BRANCH = candidate
+                if candidate != GIT_BRANCH:
+                    log_message(
+                        f"Configured branch '{GIT_BRANCH}' not found on '{remote}'; using '{candidate}'",
+                        "WARNING"
+                    )
+                return ACTIVE_GIT_BRANCH
+
+        ACTIVE_GIT_BRANCH = sorted(branches)[0]
+        log_message(
+            f"Configured branch '{GIT_BRANCH}' not found on '{remote}'; using first available branch '{ACTIVE_GIT_BRANCH}'",
+            "WARNING"
+        )
+        return ACTIVE_GIT_BRANCH
+    except Exception as e:
+        log_message(f"Failed to resolve git branch from '{remote}': {e}", "WARNING")
+        ACTIVE_GIT_BRANCH = GIT_BRANCH
+        return ACTIVE_GIT_BRANCH
 
 
 def get_current_version() -> str:
@@ -67,9 +174,13 @@ def get_current_version() -> str:
 def get_remote_version() -> Optional[str]:
     """Get latest version from git tags on remote"""
     try:
+        remote = resolve_git_remote()
+        if not remote:
+            return None
+
         # Fetch latest tags from remote
         subprocess.run(
-            ["git", "fetch", GIT_REMOTE, "--tags", "--force"],
+            ["git", "fetch", remote, "--tags", "--force"],
             cwd=BASE_DIR,
             capture_output=True,
             check=True,
@@ -107,9 +218,16 @@ def get_remote_version() -> Optional[str]:
 def check_files_changed(files: List[str]) -> bool:
     """Check if specific files have changed from remote"""
     try:
+        remote = resolve_git_remote()
+        if not remote:
+            return True
+        branch = resolve_git_branch(remote)
+        if not branch:
+            return True
+
         # Fetch latest from remote
         subprocess.run(
-            ["git", "fetch", GIT_REMOTE, GIT_BRANCH],
+            ["git", "fetch", remote, branch],
             cwd=BASE_DIR,
             capture_output=True,
             check=True,
@@ -119,7 +237,7 @@ def check_files_changed(files: List[str]) -> bool:
         # Check diff between local and remote
         for file_path in files:
             result = subprocess.run(
-                ["git", "diff", "HEAD", f"{GIT_REMOTE}/{GIT_BRANCH}", "--", file_path],
+                ["git", "diff", "HEAD", f"{remote}/{branch}", "--", file_path],
                 cwd=BASE_DIR,
                 capture_output=True,
                 text=True
@@ -182,9 +300,16 @@ def restore_backup(backup_path: Path) -> bool:
 def pull_changes() -> bool:
     """Pull latest changes from remote"""
     try:
-        log_message("Pulling changes from remote...")
+        remote = resolve_git_remote()
+        if not remote:
+            return False
+        branch = resolve_git_branch(remote)
+        if not branch:
+            return False
+
+        log_message(f"Pulling changes from {remote}/{branch}...")
         result = subprocess.run(
-            ["git", "pull", GIT_REMOTE, GIT_BRANCH],
+            ["git", "pull", remote, branch],
             cwd=BASE_DIR,
             capture_output=True,
             text=True,
@@ -202,12 +327,35 @@ def pull_changes() -> bool:
         return False
 
 
+def has_uncommitted_changes() -> bool:
+    """Return True when repository has uncommitted changes."""
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=BASE_DIR,
+            capture_output=True,
+            text=True,
+            timeout=15
+        )
+        if result.returncode != 0:
+            log_message("Failed to read git status; assuming working tree is dirty", "WARNING")
+            return True
+        return bool(result.stdout.strip())
+    except Exception as e:
+        log_message(f"Failed to verify working tree status: {e}", "WARNING")
+        return True
+
+
 def sync_to_target_version(target_version: str) -> bool:
     """Sync repository to the exact target release version tag."""
     target_tag = f"{TAG_PREFIX}{target_version}"
     try:
+        remote = resolve_git_remote()
+        if not remote:
+            return False
+
         subprocess.run(
-            ["git", "fetch", GIT_REMOTE, "--tags", "--force"],
+            ["git", "fetch", remote, "--tags", "--force"],
             cwd=BASE_DIR,
             capture_output=True,
             check=True,
@@ -376,11 +524,19 @@ def check_for_updates() -> Tuple[bool, Optional[str]]:
         return False, None
 
 
-def perform_update(target_version: str, force_rebuild: bool = False) -> bool:
+def perform_update(target_version: str, force_rebuild: bool = False, allow_dirty: bool = False) -> bool:
     """Perform the full update process"""
     try:
         current_version = get_current_version()
         log_message(f"Update process started. Current version: {current_version}")
+
+        if has_uncommitted_changes() and not allow_dirty:
+            log_message(
+                "Uncommitted local changes detected. Update aborted to avoid destructive reset. "
+                "Commit/stash changes first or rerun with --allow-dirty.",
+                "ERROR"
+            )
+            return False
         
         # Create backup before making changes
         backup_path = create_backup(current_version)
@@ -445,6 +601,16 @@ def main() -> int:
         action="store_true",
         help="Force rebuild even if no source changes detected"
     )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip interactive confirmation prompt"
+    )
+    parser.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="Allow updates even when uncommitted local changes exist"
+    )
     
     args = parser.parse_args()
     
@@ -488,9 +654,25 @@ def main() -> int:
                 return 0
             
             print(f"\n-> Update available: {version}")
-            print("  Starting update process...\n")
+            print("  WARNING: This operation may perform a hard reset to the target release tag.")
+            print("  Uncommitted local changes can be lost unless you abort now.\n")
+
+            proceed = args.yes
+            if not proceed:
+                user_input = input("Continue with update? [y/N]: ").strip().lower()
+                proceed = user_input in {"y", "yes"}
+
+            if not proceed:
+                print("\n[CANCELLED] Update cancelled by user\n")
+                return 1
+
+            print("Starting update process...\n")
             
-            if perform_update(target_version=version, force_rebuild=args.force_rebuild):
+            if perform_update(
+                target_version=version,
+                force_rebuild=args.force_rebuild,
+                allow_dirty=args.allow_dirty,
+            ):
                 print(f"\n[OK] Update completed successfully!")
                 print(f"  Restart application to apply updates\n")
                 return 0

@@ -6,11 +6,23 @@ import subprocess
 import sys
 import zipfile
 import os
+import re
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
 BUILD_DIR = BASE_DIR / "freeze_build" / "cx_freeze"
-VERSION = "0.2.0"
+
+
+def read_version() -> str:
+    try:
+        content = (BASE_DIR / "tr_gui.py").read_text(encoding="utf-8")
+        match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
+        return match.group(1) if match else "0.0.0"
+    except Exception:
+        return "0.0.0"
+
+
+VERSION = read_version()
 ZIP_NAME = f"DocuReader-{VERSION}-portable.zip"
 
 print("=" * 60)

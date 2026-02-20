@@ -2,10 +2,22 @@
 """Quick ZIP packaging script"""
 import zipfile
 import os
+import re
 from pathlib import Path
 
 BUILD_DIR = Path("freeze_build/cx_freeze")
-ZIP_NAME = "DocuReader-0.2.0-portable.zip"
+
+
+def read_version() -> str:
+    try:
+        content = Path("tr_gui.py").read_text(encoding="utf-8")
+        match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
+        return match.group(1) if match else "0.0.0"
+    except Exception:
+        return "0.0.0"
+
+
+ZIP_NAME = f"DocuReader-{read_version()}-portable.zip"
 
 print(f"Creating {ZIP_NAME} from {BUILD_DIR}...")
 

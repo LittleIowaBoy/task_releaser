@@ -2,7 +2,7 @@ import sys
 import re
 import pandas as pd
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict, List, Optional, Tuple
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTextEdit, QLabel, QComboBox, QMessageBox, QSplitter,
@@ -12,7 +12,21 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal, QProcess
 from PyQt6.QtGui import QFont, QTextDocument, QTextCursor, QColor
 from tr import ExcelParser
 
-__version__ = "0.2.2"
+__version__ = "0.2.3"
+
+LOCATION_PATTERN = re.compile(r'^\s*([A-Za-z-]*?)(\d+)?([A-Za-z]*)\s*$')
+
+
+def parse_location_parts(value: Any) -> Tuple[str, float, str]:
+    """Parse location into prefix, numeric body, and suffix for stable grouping/sorting."""
+    text = "" if value is None else str(value).strip().upper()
+    match = LOCATION_PATTERN.match(text)
+    if not match:
+        return (text, float("inf"), "")
+
+    prefix, number_part, suffix = match.groups()
+    number = int(number_part) if number_part else float("inf")
+    return (prefix or "", number, suffix or "")
 
 
 class WorkerThread(QThread):
@@ -124,36 +138,9 @@ class WorkerThread(QThread):
         
         if location_col:
             try:
-                # Sort location values using prefix, numeric body, and trailing suffix.
-                # Suffixed values are integrated into numeric order so a value like
-                # "L-180111X" can appear at the beginning of the 18* section (before
-                # "L-1801311") while still sorting after prior sections (e.g., 17*).
-                # "L-180111Y" will sort after "L-180111X" but before "L-1801311". Values without a numeric
-                # portion will be placed at the end of their respective prefix section.
-                def sort_key(value: object) -> tuple:
-                    text = "" if pd.isna(value) else str(value).strip().upper()
-                    match = re.match(r'^(\D*?)(\d+)?(\D*)$', text)
-                    if not match:
-                        return (text, float('inf'), 1, text)
-
-                    prefix, number_part, suffix = match.groups()
-                    if number_part:
-                        # If a suffix is present and the numeric portion is shorter than
-                        # standard location width, pad with trailing zeros so it sorts as
-                        # the leading bin in that numeric section.
-                        if suffix and len(number_part) < 7:
-                            number = int(number_part.ljust(7, '0'))
-                        else:
-                            number = int(number_part)
-                    else:
-                        number = float('inf')
-
-                    has_suffix = 1 if suffix else 0
-                    return (prefix, number, has_suffix, suffix)
-
                 df = df.sort_values(
                     by=location_col,
-                    key=lambda s: s.astype(str).map(sort_key)
+                    key=lambda s: s.map(parse_location_parts)
                 )
             except Exception:
                 # Fallback to default lexicographic sort if unexpected errors occur
@@ -161,7 +148,7 @@ class WorkerThread(QThread):
 
         df = df.reset_index(drop=True)
 
-        row_highlights = [None] * len(df)
+        row_highlights: List[Optional[Dict[str, str]]] = [None] * len(df)
         if 'Last Replen' in df.columns and 'Short Time' in df.columns:
             last_replen = pd.to_datetime(df['Last Replen'], errors='coerce')
             short_time = pd.to_datetime(df['Short Time'], errors='coerce')
@@ -183,7 +170,8 @@ class WorkerThread(QThread):
                     }
                     if 'Current OHB' in df.columns:
                         try:
-                            current_ohb = float(df.at[idx, 'Current OHB'])
+                            numeric_ohb = pd.to_numeric(df.at[idx, 'Current OHB'], errors='coerce')
+                            current_ohb = float(numeric_ohb) if pd.notna(numeric_ohb) else None
                         except Exception:
                             current_ohb = None
                         if current_ohb is not None:
@@ -204,7 +192,9 @@ class WorkerThread(QThread):
             self.parser.read_excel()
             
             if self.parser.df is not None:
-                self.output.emit(f"Successfully loaded CSV file with {len(self.parser.df)} rows and {len(self.parser.df.columns)} columns\n")
+                extension = Path(self.filepath).suffix.lower()
+                file_type = "CSV" if extension == ".csv" else "Excel"
+                self.output.emit(f"Successfully loaded {file_type} file with {len(self.parser.df)} rows and {len(self.parser.df.columns)} columns\n")
                 self.output.emit(f"Columns: {list(self.parser.df.columns)}\n")
                 #self.output.emit("\nFirst few rows:\n")
                 #self.output.emit(self.format_df(self.parser.df.head()))
@@ -224,6 +214,10 @@ class WorkerThread(QThread):
     def execute_selected_function(self):
         """Execute the selected function from the dropdown"""
         try:
+            if self.parser is None:
+                self.output.emit("Parser is not initialized.\n")
+                return
+
             if self.function_name == "get_task_ids_where_condition":
                 # Get Task IDs where Active OHB < Allocated
                 task_ids, items_not_met = self.parser.get_task_ids_where_condition(
@@ -248,28 +242,11 @@ class WorkerThread(QThread):
                 
                 self.task_ids_ready.emit(task_ids)
             
-            elif self.function_name == "filter_by_value":
-                self.output.emit(f"\n--- Filter by Value (Task ID = 1) ---\n")
-                filtered_df = self.parser.filter_by_value("Task ID", 1)
-                if filtered_df is not None:
-                    prepared_df = self.prepare_df_for_table(filtered_df)
-                    self.table_ready.emit(prepared_df)
-            
-            elif self.function_name == "filter_by_range":
-                self.output.emit(f"\n--- Filter by Range (Active OHB: 5-15) ---\n")
-                filtered_df = self.parser.filter_by_range("Active OHB", min_val=5, max_val=15)
-                if filtered_df is not None:
-                    prepared_df = self.prepare_df_for_table(filtered_df)
-                    self.table_ready.emit(prepared_df)
-            
-            elif self.function_name == "filter_by_contains":
-                self.output.emit(f"\n--- Filter by Contains ---\n")
-                filtered_df = self.parser.filter_by_contains("Task ID", "1")
-                if filtered_df is not None:
-                    self.output.emit(f"Found {len(filtered_df)} rows\n")
-            
             elif self.function_name == "display_all":
                 self.output.emit(f"\n--- All Data ---\n")
+                if self.parser.df is None:
+                    self.output.emit("No data loaded.\n")
+                    return
                 prepared_df = self.prepare_df_for_table(self.parser.df)
                 self.table_ready.emit(prepared_df)
             
@@ -294,6 +271,7 @@ class ExcelParserGUI(QMainWindow):
         self.table_row_location_values = None  # Map table row index to location value
         self.location_col = None  # Track location column for table grouping
         self.bulk_checkbox_update = False  # Prevent recursive checkbox handling
+        self.update_process = None
         self.init_ui()
     
     def init_ui(self):
@@ -318,6 +296,7 @@ class ExcelParserGUI(QMainWindow):
         
         # Status label (initialize early before populate_downloads_files)
         self.status_label = QLabel("Ready")
+        main_layout.addWidget(self.status_label)
         
         # File selection section
         file_layout = QHBoxLayout()
@@ -363,7 +342,7 @@ class ExcelParserGUI(QMainWindow):
         self.clear_button.clicked.connect(self.clear_output)
         button_layout.addWidget(self.clear_button)
 
-        self.update_button = QPushButton("Check For Updates")
+        self.update_button = QPushButton("Check & Install Updates")
         self.update_button.clicked.connect(self.check_for_updates)
         self.update_button.setStyleSheet("QPushButton { background-color: #4caf50; color: white; font-weight: bold; }")
         button_layout.addWidget(self.update_button)
@@ -443,6 +422,8 @@ class ExcelParserGUI(QMainWindow):
         self.table_widget.setRowCount(0)
         self.table_widget.setColumnCount(0)
         self.strikethrough_rows.clear()
+        self.task_ids = None
+        self.copy_button.setEnabled(False)
         
         self.status_label.setText("Processing... please wait")
         self.output_text.append("Starting analysis...\n")
@@ -490,8 +471,8 @@ class ExcelParserGUI(QMainWindow):
             if location_col:
                 location_value = row_data.get(location_col)
                 location_text = "" if pd.isna(location_value) else str(location_value)
-                stripped = re.sub(r'^.{2}', '', location_text)
-                prefix = stripped[:2] if stripped else None
+                parsed_prefix, parsed_number, _ = parse_location_parts(location_text)
+                prefix = (parsed_prefix, parsed_number // 100000 if parsed_number != float("inf") else float("inf"))
 
             if location_col and prev_prefix is not None and prefix != prev_prefix:
                 render_rows.append({"type": "divider"})
@@ -558,6 +539,9 @@ class ExcelParserGUI(QMainWindow):
             self.table_widget.setCellWidget(row_idx, len(df.columns), checkbox)
         
         self.table_widget.resizeColumnsToContents()
+        header = self.table_widget.horizontalHeader()
+        if header is not None:
+            header.setStretchLastSection(True)
         self.output_text.append(f"Table loaded with {len(df)} rows and {len(df.columns)} columns.\n")
     
     def on_checkbox_changed(self, row_idx: int, state):
@@ -578,6 +562,8 @@ class ExcelParserGUI(QMainWindow):
             location_value = self.table_row_location_values[row_idx]
         if location_value is None:
             return
+        if not isinstance(self.table_row_location_values, list):
+            return
 
         self.bulk_checkbox_update = True
         try:
@@ -586,7 +572,7 @@ class ExcelParserGUI(QMainWindow):
                     continue
 
                 checkbox = self.table_widget.cellWidget(table_row_idx, self.table_widget.columnCount() - 1)
-                if checkbox and checkbox.isChecked() != is_checked:
+                if isinstance(checkbox, QCheckBox) and checkbox.isChecked() != is_checked:
                     checkbox.setChecked(is_checked)
 
                 self.apply_row_strikethrough(table_row_idx, is_checked)
@@ -628,7 +614,10 @@ class ExcelParserGUI(QMainWindow):
                     item.setFont(font)
                     
                     # Get column name
-                    col_name = self.table_widget.horizontalHeaderItem(col_idx).text()
+                    header_item = self.table_widget.horizontalHeaderItem(col_idx)
+                    if header_item is None:
+                        continue
+                    col_name = header_item.text()
                     
                     # Restore text color: black for highlighted cells, white for others
                     if isinstance(highlight, dict) and col_name in highlight:
@@ -646,7 +635,7 @@ class ExcelParserGUI(QMainWindow):
     def on_task_ids_ready(self, task_ids: list):
         """Handle task IDs from worker thread"""
         self.task_ids = task_ids
-        self.copy_button.setEnabled(True)
+        self.copy_button.setEnabled(bool(task_ids))
     
     def on_data_loaded(self, df: pd.DataFrame):
         """Handle data loaded from worker thread"""
@@ -669,26 +658,31 @@ class ExcelParserGUI(QMainWindow):
         self.table_widget.setRowCount(0)
         self.table_widget.setColumnCount(0)
         self.strikethrough_rows.clear()
+        self.task_ids = None
+        self.copy_button.setEnabled(False)
         self.status_label.setText("Output cleared")
     
     def copy_to_clipboard(self):
         """Copy task IDs to clipboard"""
         if self.task_ids:
             clipboard_text = ", ".join(map(str, self.task_ids))
-            QApplication.clipboard().setText(clipboard_text)
+            clipboard = QApplication.clipboard()
+            if clipboard is not None:
+                clipboard.setText(clipboard_text)
             self.status_label.setText(f"Copied {len(self.task_ids)} Task ID(s) to clipboard")
             self.output_text.append(f"\nCopied to clipboard: {clipboard_text}\n")
 
     def check_for_updates(self):
-        """Check for and automatically install application updates using update.py"""
+        """Check for and automatically install application updates."""
         reply = QMessageBox.question(
             self,
             "Update Application",
-            "This will check for updates and automatically install them if available.\n\n"
+            "This will run the updater and may reset local files to a release version.\n\n"
+            "Any uncommitted local changes can be lost.\n\n"
             "The application will need to be restarted after updating.\n\n"
             "Do you want to continue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes
+            QMessageBox.StandardButton.No
         )
 
         if reply != QMessageBox.StandardButton.Yes:
@@ -706,21 +700,47 @@ class ExcelParserGUI(QMainWindow):
         self.update_process.readyReadStandardError.connect(self.handle_update_error)
         self.update_process.finished.connect(self.update_finished)
 
-        update_script = Path(__file__).parent / "update.py"
-        self.update_process.start(sys.executable, [str(update_script)])
+        update_command = self.resolve_update_command()
+        if update_command is None:
+            self.output_text.append("Updater is not available in this installation.\n")
+            self.status_label.setText("Updater unavailable")
+            self.update_button.setEnabled(True)
+            self.update_button.setText("Check & Install Updates")
+            self.update_process = None
+            return
+
+        update_args = update_command[1:] + ["--yes"]
+        self.update_process.start(update_command[0], update_args)
+
+    def resolve_update_command(self) -> Optional[list]:
+        """Resolve updater command for source checkout, installed package, or frozen app."""
+        frozen = getattr(sys, "frozen", False)
+
+        if frozen:
+            exe_dir = Path(sys.executable).resolve().parent
+            candidate = exe_dir / "update.exe"
+            if candidate.exists():
+                return [str(candidate)]
+            return None
+
+        update_script = Path(__file__).resolve().parent / "update.py"
+        if update_script.exists():
+            return [sys.executable, str(update_script)]
+
+        return [sys.executable, "-m", "update"]
 
     def handle_update_output(self):
         """Handle stdout from update process"""
         if self.update_process:
             data = self.update_process.readAllStandardOutput()
-            output = bytes(data).decode("utf-8", errors="ignore")
+            output = bytes(data.data()).decode("utf-8", errors="replace")
             self.output_text.append(output)
 
     def handle_update_error(self):
         """Handle stderr from update process"""
         if self.update_process:
             data = self.update_process.readAllStandardError()
-            output = bytes(data).decode("utf-8", errors="ignore")
+            output = bytes(data.data()).decode("utf-8", errors="replace")
             if output.strip():
                 self.output_text.append(f"[ERROR] {output}")
 

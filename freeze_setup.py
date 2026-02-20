@@ -13,7 +13,7 @@ build_exe_options = {
         "xlrd", 
         "PyQt6",
     ],
-    "includes": ["tr", "tr_gui"],
+    "includes": ["tr", "tr_gui", "update"],
     "excludes": ["tkinter", "unittest", "test", "build", "dist", "freeze_build"],
     "include_msvcr": False,
     "build_exe": str(BASE_DIR / "freeze_build" / "cx_freeze"),
@@ -52,7 +52,12 @@ executables = [
         target_name="DocuReader.exe",
         shortcut_name="DocuReader",
         shortcut_dir="ProgramMenuFolder",
-    )
+    ),
+    Executable(
+        script="update.py",
+        base=None,
+        target_name="update.exe",
+    ),
 ]
 
 # Read version from tr_gui.py
