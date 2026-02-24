@@ -19,13 +19,19 @@ LOCATION_PATTERN = re.compile(r'^\s*([A-Za-z-]*?)(\d+)?([A-Za-z]*)\s*$')
 
 def parse_location_parts(value: Any) -> Tuple[str, float, str]:
     """Parse location into prefix, numeric body, and suffix for stable grouping/sorting."""
-    text = "" if value is None else str(value).strip().upper()
+    text = "" if pd.isna(value) else str(value).strip().upper()
     match = LOCATION_PATTERN.match(text)
     if not match:
         return (text, float("inf"), "")
 
     prefix, number_part, suffix = match.groups()
-    number = int(number_part) if number_part else float("inf")
+    if number_part:
+        if suffix and len(number_part) < 7:
+            number = int(number_part.ljust(7, "0"))
+        else:
+            number = int(number_part)
+    else:
+        number = float("inf")
     return (prefix or "", number, suffix or "")
 
 
@@ -129,7 +135,7 @@ class WorkerThread(QThread):
 
         # Sort by location column if present (numeric-aware sort ascending)
         # Check for different location column names
-        location_columns = ['Location', 'Locn', 'DSP_LOCN']
+        location_columns = ['Location', 'Locn', 'DSP_LOCN', 'Destination Location']
         location_col = None
         for col in location_columns:
             if col in df.columns:
