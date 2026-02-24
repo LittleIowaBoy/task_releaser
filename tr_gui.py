@@ -441,6 +441,27 @@ class ExcelParserGUI(QMainWindow):
     def append_output(self, text: str):
         """Append text to the output display"""
         self.output_text.append(text)
+
+    def _is_dark_theme(self) -> bool:
+        """Determine whether the active application theme is dark."""
+        palette = self.table_widget.palette()
+        window_color = palette.color(palette.ColorRole.Window)
+        return window_color.lightness() < 128
+
+    def _default_table_text_color(self) -> QColor:
+        """Return standard table text color based on active theme."""
+        return QColor("white") if self._is_dark_theme() else QColor("black")
+
+    def _is_highlighted_cell(self, data_row_idx: int, col_name: str) -> bool:
+        """Return True when a cell has active background highlight."""
+        if not isinstance(self.row_highlights, list) or data_row_idx >= len(self.row_highlights):
+            return False
+
+        highlight = self.row_highlights[data_row_idx]
+        if isinstance(highlight, dict):
+            return col_name in highlight
+
+        return highlight in ("darkgreen", "darkyellow") and col_name in ("Last Replen", "Short Time")
     
     def on_table_ready(self, df: pd.DataFrame):
         """Populate the table with data and add checkbox column"""
@@ -495,13 +516,14 @@ class ExcelParserGUI(QMainWindow):
         
         # Populate table with data
         self.row_highlights = df.attrs.get('row_highlights')
+        default_text_color = self._default_table_text_color()
 
         for row_idx, render_row in enumerate(render_rows):
             if render_row["type"] == "divider":
                 for col_idx in range(len(df.columns)):
                     item = QTableWidgetItem("-----")
                     item.setFlags(Qt.ItemFlag.NoItemFlags)
-                    item.setForeground(QColor("white"))
+                    item.setForeground(default_text_color)
                     self.table_widget.setItem(row_idx, col_idx, item)
                 continue
 
@@ -531,6 +553,7 @@ class ExcelParserGUI(QMainWindow):
                         item.setForeground(QColor("black"))
                 elif row_color is not None and col_name in ("Last Replen", "Short Time"):
                     item.setBackground(row_color)
+                    item.setForeground(QColor("black"))
                 self.table_widget.setItem(row_idx, col_idx, item)
 
             # Add checkbox in the last column
@@ -600,11 +623,7 @@ class ExcelParserGUI(QMainWindow):
         elif not is_checked and row_idx in self.strikethrough_rows:
             # Remove strikethrough and restore original formatting
             self.strikethrough_rows.discard(row_idx)
-            
-            # Get the highlight info for this row
-            highlight = None
-            if isinstance(self.row_highlights, list) and data_row_idx < len(self.row_highlights):
-                highlight = self.row_highlights[data_row_idx]
+            default_text_color = self._default_table_text_color()
             
             for col_idx in range(self.table_widget.columnCount() - 1):  # Skip checkbox column
                 item = self.table_widget.item(row_idx, col_idx)
@@ -619,13 +638,11 @@ class ExcelParserGUI(QMainWindow):
                         continue
                     col_name = header_item.text()
                     
-                    # Restore text color: black for highlighted cells, white for others
-                    if isinstance(highlight, dict) and col_name in highlight:
-                        # This cell was highlighted, restore black text
+                    # Restore text color: black for highlighted cells, theme-default for others
+                    if self._is_highlighted_cell(data_row_idx, col_name):
                         item.setForeground(QColor("black"))
                     else:
-                        # This cell was not highlighted, use white text
-                        item.setForeground(QColor("white"))
+                        item.setForeground(default_text_color)
     
     def on_error(self, error_msg: str):
         """Handle errors from worker thread"""
