@@ -225,6 +225,7 @@ class WorkerThread(QThread):
                 return
 
             if self.function_name == "get_task_ids_where_condition":
+                
                 # Get Task IDs where Active OHB < Allocated
                 task_ids, items_not_met = self.parser.get_task_ids_where_condition(
                     task_id_col="Task ID",
@@ -233,17 +234,33 @@ class WorkerThread(QThread):
                     comparison=">=",
                     item_col="Item"
                 )
+                # Mode for 'Locked Full Container Chase Tasks' table with only Task ID and Aisle columns - in this case we skip the 
+                # "Items that don't meet the condition" section since it doesn't apply, and we show all Task IDs in the 
+                # "Tasks that need Released" section regardless of whether they meet the condition or not, since the user likely 
+                # wants to see all of them for this use case
+                is_task_aisle_only_mode = (
+                    self.parser.df is not None
+                    and len(self.parser.df.columns) == 2
+                    and set(self.parser.df.columns) == {"TASK_ID", "Aisle"}
+                )
                 
                 # Display items from Task IDs that don't meet the condition first
-                self.output.emit(f"\n--- Items that need Replenishment Task (Active OHB < Allocated) ---\n")
-                if items_not_met:
-                    for item, task_id_count in sorted(items_not_met.items(), key=lambda x: x[1], reverse=True):
-                        self.output.emit(f"  {item}: affects {task_id_count} Task ID(s)\n")
+                if is_task_aisle_only_mode:
+                    self.output.emit(f"\n--- Item Condition Summary ---\n")
+                    self.output.emit("Not applicable for Locked Full Container Chase Tasks.\n")
                 else:
-                    self.output.emit("No items found in Task IDs that don't meet the condition.\n")
+                    self.output.emit(f"\n--- Items that need Replenishment Task (Active OHB < Allocated) ---\n")
+                    if items_not_met:
+                        for item, task_id_count in sorted(items_not_met.items(), key=lambda x: x[1], reverse=True):
+                            self.output.emit(f"  {item}: affects {task_id_count} Task ID(s)\n")
+                    else:
+                        self.output.emit("No items found in Task IDs that don't meet the condition.\n")
                 
                 # Then display task IDs that meet the condition
-                self.output.emit(f"\n--- Tasks that need Released (Active OHB >= Allocated) ---\n")
+                if is_task_aisle_only_mode:
+                    self.output.emit(f"\n--- All Task IDs (TASK_ID/Aisle input) ---\n")
+                else:
+                    self.output.emit(f"\n--- Tasks that need Released (Active OHB >= Allocated) ---\n")
                 self.output.emit(f"{task_ids}\n")
                 
                 self.task_ids_ready.emit(task_ids)

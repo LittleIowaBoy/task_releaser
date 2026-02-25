@@ -284,6 +284,17 @@ class ExcelParser:
         if self.df is None or self.df.empty:
             print("Error: No data loaded")
             return [], {}
+
+        # Special case: if file only has TASK_ID and Aisle, return all Task IDs
+        if len(self.df.columns) == 2 and set(self.df.columns) == {"TASK_ID", "Aisle"}:
+            task_ids = []
+            for task_id in self.df["TASK_ID"].dropna().unique():
+                if self._is_numeric(task_id):
+                    task_ids.append(int(float(task_id)))
+
+            print("Detected 2-column TASK_ID/Aisle input; returning all TASK_ID values")
+            print(f"Extracted {len(task_ids)} unique Task IDs")
+            return task_ids, {}
         
         # Validate columns exist
         missing_cols = []
