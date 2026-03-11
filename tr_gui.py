@@ -12,7 +12,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal, QProcess
 from PyQt6.QtGui import QFont, QTextDocument, QTextCursor, QColor
 from tr import ExcelParser
 
-__version__ = "0.2.3"
+__version__ = "0.2.4"
 
 LOCATION_PATTERN = re.compile(r'^\s*([A-Za-z-]*?)(\d+)?([A-Za-z]*)\s*$')
 
@@ -263,6 +263,19 @@ class WorkerThread(QThread):
                     self.output.emit(f"\n--- Tasks that need Released (Active OHB >= Allocated) ---\n")
                 self.output.emit(f"{task_ids}\n")
                 
+                # Create detailed DataFrame from items_not_met for table display
+                if items_not_met:
+                    # Sort by affected Task ID count descending (matches text output order)
+                    sorted_items = sorted(items_not_met.items(), key=lambda x: x[1], reverse=True)
+                    items_df = pd.DataFrame(sorted_items, columns=["Item", "Affected Task ID Count"])
+                else:
+                    # Empty DataFrame with correct columns if no items found
+                    items_df = pd.DataFrame(columns=["Item", "Affected Task ID Count"])
+                
+                # Emit table data for table widget display
+                self.table_ready.emit(items_df)
+                
+                # Emit task IDs for clipboard functionality
                 self.task_ids_ready.emit(task_ids)
             
             elif self.function_name == "display_all":
