@@ -33,8 +33,8 @@
             },
             "visible": true,
             "shape": "trust-boundary-box",
-            "id": "8d1e0943-e57a-4c86-8fcc-7d42e88ce2fc",
             "zIndex": -1,
+            "id": "8d1e0943-e57a-4c86-8fcc-7d42e88ce2fc",
             "data": {
               "type": "tm.BoundaryBox",
               "name": "MeCo Trust Boundary",
@@ -73,6 +73,7 @@
             },
             "visible": true,
             "shape": "process",
+            "zIndex": 1,
             "ports": {
               "groups": {
                 "top": {
@@ -156,7 +157,6 @@
               ]
             },
             "id": "fcc3b8ef-70a5-4dc8-bb10-c166055efcb9",
-            "zIndex": 1,
             "data": {
               "type": "tm.Process",
               "name": "Browser and \nActiveX Plug Ins",
@@ -193,6 +193,7 @@
             },
             "visible": true,
             "shape": "process",
+            "zIndex": 2,
             "ports": {
               "groups": {
                 "top": {
@@ -276,7 +277,6 @@
               ]
             },
             "id": "7fbdf05a-7f9e-4a67-9fec-809abc2f16ee",
-            "zIndex": 2,
             "data": {
               "type": "tm.Process",
               "name": "Web Server",
@@ -318,6 +318,7 @@
             },
             "visible": true,
             "shape": "store",
+            "zIndex": 3,
             "ports": {
               "groups": {
                 "top": {
@@ -401,7 +402,6 @@
               ]
             },
             "id": "9d8a7720-f88f-4e17-8619-994a07ef25da",
-            "zIndex": 3,
             "data": {
               "type": "tm.Store",
               "name": "SQL Database",
@@ -521,7 +521,7 @@
             "vertices": [
               {
                 "x": 480,
-                "y": 122
+                "y": 170
               }
             ]
           },
@@ -572,14 +572,13 @@
               "cell": "9d8a7720-f88f-4e17-8619-994a07ef25da",
               "port": "6758ff12-8acf-462c-9922-f11bc5c5d94d"
             },
-            "vertices": [
-              {
-                "x": 800,
-                "y": 170
-              }
-            ],
             "tools": {
               "items": [
+                "boundary",
+                "button-remove",
+                "vertices",
+                "source-arrowhead",
+                "target-arrowhead",
                 "boundary",
                 "button-remove",
                 "vertices",
@@ -637,7 +636,13 @@
                 "target-arrowhead"
               ],
               "name": null
-            }
+            },
+            "vertices": [
+              {
+                "x": 800,
+                "y": 170
+              }
+            ]
           },
           {
             "shape": "flow",
