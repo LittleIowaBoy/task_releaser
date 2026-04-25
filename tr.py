@@ -18,6 +18,17 @@ class ExcelParser:
         """
         self.filepath = filepath
         self.df = None
+
+    def list_sheets(self) -> list[str]:
+        """Return Excel sheet names. Returns an empty list for CSV files
+        or if the workbook cannot be opened."""
+        if self.filepath.lower().endswith(".csv"):
+            return []
+        try:
+            xls = pd.ExcelFile(self.filepath)
+            return list(xls.sheet_names)
+        except Exception:
+            return []
         
     def read_excel(self, sheet_name: int | str = 0) -> pd.DataFrame:
         """
@@ -244,6 +255,25 @@ class ExcelParser:
         if self.df is None:
             return []
         return list(self.df.columns)
+
+    def get_unique_numeric_values(self, column: str) -> List[int]:
+        """Return all unique numeric values from ``column`` as ints.
+
+        Used by templates that just want every row's ID without a comparison
+        (e.g. the Locked Full Container Chase Tasks export).
+        """
+        if self.df is None or column not in self.df.columns:
+            return []
+        out: List[int] = []
+        seen = set()
+        for value in self.df[column].dropna():
+            if not self._is_numeric(value):
+                continue
+            iv = int(float(value))
+            if iv not in seen:
+                seen.add(iv)
+                out.append(iv)
+        return out
     
     def _is_numeric(self, value: Any) -> bool:
         """
@@ -285,17 +315,6 @@ class ExcelParser:
             print("Error: No data loaded")
             return [], {}
 
-        # Special case: if file only has TASK_ID and Aisle, return all Task IDs
-        if len(self.df.columns) == 2 and set(self.df.columns) == {"TASK_ID", "Aisle"}:
-            task_ids = []
-            for task_id in self.df["TASK_ID"].dropna().unique():
-                if self._is_numeric(task_id):
-                    task_ids.append(int(float(task_id)))
-
-            print("Detected 2-column TASK_ID/Aisle input; returning all TASK_ID values")
-            print(f"Extracted {len(task_ids)} unique Task IDs")
-            return task_ids, {}
-        
         # Validate columns exist
         missing_cols = []
         for col in [task_id_col, condition_col1, condition_col2, item_col]:

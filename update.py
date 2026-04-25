@@ -149,14 +149,14 @@ def resolve_git_branch(remote: str) -> Optional[str]:
 
 
 def get_current_version() -> str:
-    """Extract current version from tr_gui.py"""
+    """Extract current version from _version.py (single source of truth)."""
     try:
-        with open(BASE_DIR / "tr_gui.py", "r") as f:
+        with open(BASE_DIR / "_version.py", "r") as f:
             content = f.read()
             match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
             if match:
                 return match.group(1)
-        
+
         tag_result = subprocess.run(
             ["git", "describe", "--tags", "--abbrev=0"],
             cwd=BASE_DIR,

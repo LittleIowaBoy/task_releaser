@@ -1,0 +1,7 @@
+"""Pytest fixtures - extend sys.path so test files can import the top-level modules."""
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))

@@ -1,26 +1,17 @@
 @echo off
 REM DocuReader Installer Batch Wrapper
-REM Runs the PowerShell installation script
+REM Per-user installation - no Administrator rights required.
 
 setlocal enabledelayedexpansion
 
 echo.
-echo === DocuReader Installer ===
+echo === DocuReader Installer (per-user) ===
 echo.
-
-REM Check for admin privileges
-net session >nul 2>&1
-if %errorlevel% neq 0 (
-    echo Error: This script requires Administrator privileges.
-    echo Please right-click and select "Run as Administrator"
-    pause
-    exit /b 1
-)
 
 REM Get script directory
 set "SCRIPT_DIR=%~dp0"
 
-REM Run PowerShell installer with elevated privileges
+REM Run PowerShell installer (no elevation needed)
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%install-docureader.ps1"
 
 if %errorlevel% neq 0 (

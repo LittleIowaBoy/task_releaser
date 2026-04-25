@@ -21,10 +21,23 @@ build_exe_options = {
     "packages": [
         "pandas",
         "openpyxl",
-        "xlrd", 
+        "xlrd",
         "PyQt6",
     ],
-    "includes": ["tr", "tr_gui", "update"],
+    "includes": [
+        "tr",
+        "tr_gui",
+        "update",
+        "updater_github",
+        "templates",
+        "view",
+        "migrate",
+        "_version",
+        "_release",
+    ],
+    "include_files": [
+        (str(BASE_DIR / "default_templates.json"), "default_templates.json"),
+    ],
     "excludes": ["tkinter", "unittest", "test", "build", "dist", "freeze_build"],
     "include_msvcr": False,
     "build_exe": str(BASE_DIR / "freeze_build" / "cx_freeze"),
@@ -80,7 +93,7 @@ msi_data = {
 bdist_msi_options = {
     "add_to_path": False,
     "all_users": False,
-    "initial_target_dir": r"[ProgramFilesFolder]\\DocuReader",
+    "initial_target_dir": r"[LocalAppDataFolder]\\Programs\\DocuReader",
     "data": msi_data,
 }
 
@@ -97,10 +110,15 @@ executables = [
         base=None,
         target_name="update.exe",
     ),
+    Executable(
+        script="updater_github.py",
+        base=None,
+        target_name="update_github.exe",
+    ),
 ]
 
-# Read version from tr_gui.py
-with open(BASE_DIR / "tr_gui.py", "r") as f:
+# Read version from _version.py (single source of truth).
+with open(BASE_DIR / "_version.py", "r") as f:
     content = f.read()
     match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
     version = match.group(1) if match else "0.0.0"

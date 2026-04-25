@@ -2,6 +2,7 @@
 """
 Quick script to rebuild and repackage DocuReader
 """
+import hashlib
 import subprocess
 import sys
 import zipfile
@@ -21,7 +22,7 @@ FREEZE_TIMEOUT_SECONDS = 20 * 60
 
 def read_version() -> str:
     try:
-        content = (BASE_DIR / "tr_gui.py").read_text(encoding="utf-8")
+        content = (BASE_DIR / "_version.py").read_text(encoding="utf-8")
         match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
         return match.group(1) if match else "0.0.0"
     except Exception:
@@ -158,6 +159,13 @@ size_mb = zip_path.stat().st_size / (1024 * 1024)
 
 print(f"  Created: {ZIP_NAME}")
 print(f"  Size: {size_mb:.2f} MB")
+
+# Step 3: SHA256SUMS.txt for the GitHub Releases auto-updater.
+print("\n[3/3] Writing SHA256SUMS.txt")
+digest = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+sums_path = BASE_DIR / "SHA256SUMS.txt"
+sums_path.write_text(f"{digest}  {ZIP_NAME}\n", encoding="utf-8")
+print(f"  Wrote {sums_path.name}")
 
 print("\n" + "=" * 60)
 print("Repackaging complete!")

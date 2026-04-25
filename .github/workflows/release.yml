@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (e.g. v0.3.0). Must already exist."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build portable ZIP (Windows)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install runtime + build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pandas "PyQt6>=6.5" openpyxl xlrd cx_Freeze
+
+      - name: Run tests
+        shell: pwsh
+        run: |
+          if (Test-Path tests) {
+            python -m pip install pytest
+            python -m pytest -q
+          } else {
+            Write-Host "No tests/ directory; skipping."
+          }
+
+      - name: Build portable ZIP + checksums
+        shell: pwsh
+        run: python rebuild_and_package.py
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $content = Get-Content -Raw _version.py
+          if ($content -match '__version__\s*=\s*["'']([^"'']+)["'']') {
+            "version=$($matches[1])" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            throw "Could not parse __version__ from _version.py"
+          }
+
+      - name: Verify ZIP exists
+        shell: pwsh
+        run: |
+          $zip = "DocuReader-$($env:VERSION)-portable.zip"
+          if (-not (Test-Path $zip)) { throw "Missing $zip" }
+          if (-not (Test-Path SHA256SUMS.txt)) { throw "Missing SHA256SUMS.txt" }
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: DocuReader ${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          files: |
+            DocuReader-${{ steps.version.outputs.version }}-portable.zip
+            SHA256SUMS.txt

@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "templates": [
+    {
+      "name": "Replenishment Audit (Whole Table)",
+      "description": "Full replenishment audit table from Manhattan with location/item/replen detail. Reorders to put Location and Replen Location first, then drops noise columns.",
+      "filename_patterns": ["*replen*audit*", "*replen*report*"],
+      "required_columns": [
+        "Location",
+        "Item",
+        "Description",
+        "Current OHB",
+        "Last Replen",
+        "Last Replen Qty",
+        "Replen Location",
+        "Short Time",
+        "User"
+      ],
+      "drop": ["Rsn Code", "Tie", "LOCN_CLASS", "CYCLE_CNT_PENDING"],
+      "rename": {},
+      "order": [
+        "Location",
+        "Replen Location",
+        "Item",
+        "Description",
+        "Current OHB",
+        "Last Replen Qty",
+        "Last Replen",
+        "Short Time",
+        "User"
+      ],
+      "sort_by": [["Location", "asc"]],
+      "location_columns": ["Location", "Locn", "DSP_LOCN", "Destination Location"],
+      "highlights": [
+        {
+          "name": "Replen completed after short time (good)",
+          "when": "Last Replen > Short Time",
+          "target_columns": ["Last Replen", "Short Time"],
+          "color": "darkgreen",
+          "priority": 10
+        },
+        {
+          "name": "Replen completed before short time (warn)",
+          "when": "Last Replen < Short Time",
+          "target_columns": ["Last Replen", "Short Time"],
+          "color": "darkyellow",
+          "priority": 10
+        },
+        {
+          "name": "Low OHB on warning (good)",
+          "when": "Current OHB <= 5",
+          "target_columns": ["Current OHB"],
+          "color": "darkgreen",
+          "priority": 5
+        },
+        {
+          "name": "High OHB on warning (warn)",
+          "when": "Current OHB > 5",
+          "target_columns": ["Current OHB"],
+          "color": "darkyellow",
+          "priority": 5
+        }
+      ],
+      "builtin": true
+    },
+    {
+      "name": "Chase Tasks (Active OHB / Allocated)",
+      "description": "Replenishment chase-task report. Used by 'Chase Tasks Needing Released' analysis to compare Active OHB against Allocated.",
+      "filename_patterns": ["*chase*task*", "*chase_tasks*"],
+      "required_columns": ["Task ID", "Active OHB", "Allocated", "Item"],
+      "drop": [],
+      "rename": {},
+      "order": [],
+      "sort_by": [["Task ID", "asc"]],
+      "location_columns": ["Locn", "DSP_LOCN"],
+      "highlights": [],
+      "builtin": true
+    },
+    {
+      "name": "Locked Full Container Chase Tasks",
+      "description": "Two-column TASK_ID/Aisle export. All Task IDs are returned regardless of condition.",
+      "filename_patterns": ["*locked*full*container*"],
+      "required_columns": ["TASK_ID", "Aisle"],
+      "drop": [],
+      "rename": {},
+      "order": ["TASK_ID", "Aisle"],
+      "sort_by": [["Aisle", "asc"], ["TASK_ID", "asc"]],
+      "location_columns": [],
+      "highlights": [],
+      "builtin": true
+    }
+  ]
+}
