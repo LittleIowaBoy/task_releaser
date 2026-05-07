@@ -243,12 +243,13 @@ class WorkerThread(QThread):
     task_ids_ready = pyqtSignal(list)  # Emit the task IDs for clipboard copy
     template_matched = pyqtSignal(str, str)  # template_name, match_reason
     
-    def __init__(self, filepath: str, function_name: str, registry: TemplateRegistry, sheet_name: Optional[str] = None):
+    def __init__(self, filepaths: List[str], function_name: str, registry: TemplateRegistry, sheet_names: Optional[Dict[str, str]] = None):
         super().__init__()
-        self.filepath = filepath
+        self.filepaths = filepaths
+        self.filepath = filepaths[0] if filepaths else ""  # primary path for template matching
         self.function_name = function_name
         self.registry = registry
-        self.sheet_name = sheet_name
+        self.sheet_names = sheet_names or {}  # filepath -> sheet_name
         self.parser = None
         self.matched_template: Optional[Template] = None
 
@@ -283,29 +284,45 @@ class WorkerThread(QThread):
 
     def run(self):
         try:
-            self.parser = ExcelParser(self.filepath)
-            if self.sheet_name:
-                self.parser.read_excel(sheet_name=self.sheet_name)
+            all_dfs: List[pd.DataFrame] = []
+            for fp in self.filepaths:
+                parser = ExcelParser(fp)
+                sheet = self.sheet_names.get(fp)
+                if sheet:
+                    parser.read_excel(sheet_name=sheet)
+                else:
+                    parser.read_excel()
+                if parser.df is None:
+                    self.error.emit(f"Failed to load {Path(fp).name}")
+                    return
+                extension = Path(fp).suffix.lower()
+                file_type = "CSV" if extension == ".csv" else "Excel"
+                self.output.emit(
+                    f"Loaded {file_type} '{Path(fp).name}': {len(parser.df)} rows, "
+                    f"{len(parser.df.columns)} columns\n"
+                )
+                all_dfs.append(parser.df)
+
+            if len(all_dfs) == 1:
+                combined_df = all_dfs[0]
             else:
-                self.parser.read_excel()
+                combined_df = pd.concat(all_dfs, ignore_index=True)
+                self.output.emit(
+                    f"Combined {len(self.filepaths)} files: {len(combined_df)} total rows\n"
+                )
 
-            if self.parser.df is None:
-                self.error.emit("Failed to load data")
-                return
+            self.output.emit(f"Columns: {list(combined_df.columns)}\n")
 
-            extension = Path(self.filepath).suffix.lower()
-            file_type = "CSV" if extension == ".csv" else "Excel"
-            self.output.emit(
-                f"Successfully loaded {file_type} file with {len(self.parser.df)} rows "
-                f"and {len(self.parser.df.columns)} columns\n"
-            )
-            self.output.emit(f"Columns: {list(self.parser.df.columns)}\n")
-
-            # Match a template based on filename + columns.
-            match = self.registry.select(self.parser.df.columns, self.filepath)
+            # Match template using the primary file's name and the combined columns.
+            match = self.registry.select(combined_df.columns, self.filepath)
             self.matched_template = match.template
             self.output.emit(f"Detected template: {match.template.name}  ({match.reason})\n")
             self.template_matched.emit(match.template.name, match.reason)
+
+            # Build a single parser whose .df is the combined data so that
+            # execute_selected_function() works unchanged.
+            self.parser = ExcelParser(self.filepath)
+            self.parser.df = combined_df
 
             self.execute_selected_function()
             self.data_loaded.emit(self.parser.df)
@@ -436,7 +453,33 @@ class ExcelParserGUI(QMainWindow):
         file_layout.addWidget(self.file_combo)
         
         main_layout.addLayout(file_layout)
-        
+
+        # Extra files row — allows multi-document parsing (e.g. east + west tower).
+        extra_layout = QHBoxLayout()
+        self.extra_files_label = QLabel("Additional files: none")
+        self.extra_files_label.setStyleSheet("QLabel { color: #555; font-style: italic; }")
+        extra_layout.addWidget(self.extra_files_label)
+        self.add_files_button = QPushButton("Add files...")
+        self.add_files_button.setToolTip(
+            "Select additional CSV/XLSX files to parse together with the primary file above. "
+            "Rows from all files are combined before analysis."
+        )
+        self.add_files_button.clicked.connect(self.add_extra_files)
+        extra_layout.addWidget(self.add_files_button)
+        self.remove_extra_file_button = QPushButton("Remove selected")
+        self.remove_extra_file_button.clicked.connect(self.remove_extra_file)
+        extra_layout.addWidget(self.remove_extra_file_button)
+        self.clear_extra_button = QPushButton("Clear all")
+        self.clear_extra_button.clicked.connect(self.clear_extra_files)
+        extra_layout.addWidget(self.clear_extra_button)
+        extra_layout.addStretch()
+        main_layout.addLayout(extra_layout)
+
+        self.extra_files_list = QListWidget()
+        self.extra_files_list.setMaximumHeight(70)
+        self.extra_files_list.hide()
+        main_layout.addWidget(self.extra_files_list)
+
         # Function selection section
         function_layout = QHBoxLayout()
         function_layout.addWidget(QLabel("What do you need?"))
@@ -565,21 +608,77 @@ class ExcelParserGUI(QMainWindow):
         else:
             self.file_combo.addItem("No files found", None)
             self.status_label.setText("No CSV or Excel files found in Downloads folder")
-    
+
+    # ------------------------------------------------------------------
+    # Multi-file helpers
+    # ------------------------------------------------------------------
+
+    def add_extra_files(self):
+        """Open a file browser and append chosen files to the extra-files list."""
+        downloads = str(Path.home() / "Downloads")
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Add files to parse",
+            downloads,
+            "Data files (*.csv *.xlsx *.xls);;All files (*)",
+        )
+        existing_paths = {
+            self.extra_files_list.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(self.extra_files_list.count())
+        }
+        for fp in files:
+            if fp in existing_paths:
+                continue
+            item = QListWidgetItem(Path(fp).name)
+            item.setData(Qt.ItemDataRole.UserRole, fp)
+            self.extra_files_list.addItem(item)
+            existing_paths.add(fp)
+        self._refresh_extra_files_ui()
+
+    def remove_extra_file(self):
+        """Remove the currently selected item(s) from the extra-files list."""
+        for item in self.extra_files_list.selectedItems():
+            self.extra_files_list.takeItem(self.extra_files_list.row(item))
+        self._refresh_extra_files_ui()
+
+    def clear_extra_files(self):
+        """Remove all additional files from the list."""
+        self.extra_files_list.clear()
+        self._refresh_extra_files_ui()
+
+    def _refresh_extra_files_ui(self):
+        """Sync the label text and list-widget visibility to the current count."""
+        count = self.extra_files_list.count()
+        if count == 0:
+            self.extra_files_label.setText("Additional files: none")
+            self.extra_files_list.hide()
+        else:
+            noun = "file" if count == 1 else "files"
+            self.extra_files_label.setText(f"Additional files: {count} {noun} selected")
+            self.extra_files_list.show()
+
     def start_analysis(self):
         """Start the analysis in a worker thread"""
         if self.file_combo.currentData() is None:
             QMessageBox.warning(self, "No File", "No file selected. Please select a file from Downloads.")
             return
-        
-        filepath = self.file_combo.currentData()
+
+        primary_filepath = self.file_combo.currentData()
+        extra_filepaths = [
+            self.extra_files_list.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(self.extra_files_list.count())
+        ]
+        all_filepaths = [primary_filepath] + extra_filepaths
         selected_function = self.function_combo.currentData()
 
-        # If this is a multi-sheet workbook, prompt the user (with the last
-        # used sheet for this file remembered via QSettings).
-        sheet_name = self._pick_sheet(filepath)
-        if sheet_name is False:  # user cancelled the dialog
-            return
+        # Prompt for sheet selection for every multi-sheet workbook in the list.
+        sheet_names: Dict[str, str] = {}
+        for fp in all_filepaths:
+            sheet = self._pick_sheet(fp)
+            if sheet is False:  # user cancelled
+                return
+            if sheet:
+                sheet_names[fp] = sheet
 
         # Disable buttons while processing
         self.start_button.setEnabled(False)
@@ -593,12 +692,17 @@ class ExcelParserGUI(QMainWindow):
         self.strikethrough_rows.clear()
         self.task_ids = None
         self.copy_button.setEnabled(False)
-        
-        self.status_label.setText("Processing... please wait")
-        self.output_text.append("Starting analysis...\n")
-        
+
+        file_count = len(all_filepaths)
+        if file_count > 1:
+            self.status_label.setText(f"Processing {file_count} files... please wait")
+            self.output_text.append(f"Starting analysis of {file_count} files...\n")
+        else:
+            self.status_label.setText("Processing... please wait")
+            self.output_text.append("Starting analysis...\n")
+
         # Create and start worker thread
-        self.worker_thread = WorkerThread(filepath, selected_function, self.registry, sheet_name=sheet_name or None)
+        self.worker_thread = WorkerThread(all_filepaths, selected_function, self.registry, sheet_names=sheet_names)
         self.worker_thread.output.connect(self.append_output)
         self.worker_thread.error.connect(self.on_error)
         self.worker_thread.table_ready.connect(self.on_table_ready)
@@ -689,7 +793,7 @@ class ExcelParserGUI(QMainWindow):
         self.table_widget.setRowCount(len(render_rows))
         self.table_widget.setColumnCount(len(df.columns) + 1)
 
-        headers = list(df.columns) + ["Counted?"]
+        headers = list(df.columns) + ["Done?"]
         self.table_widget.setHorizontalHeaderLabels(headers)
 
         default_text_color = self._default_table_text_color()
@@ -744,11 +848,14 @@ class ExcelParserGUI(QMainWindow):
         location_value = None
         if isinstance(self.table_row_location_values, list) and row_idx < len(self.table_row_location_values):
             location_value = self.table_row_location_values[row_idx]
+
+        # No location grouping — apply strikethrough only to this single row.
         if location_value is None:
-            return
-        if not isinstance(self.table_row_location_values, list):
+            self.apply_row_strikethrough(row_idx, is_checked)
             return
 
+        # Location grouping present — update every row that shares the same
+        # location prefix so the whole group is ticked/unticked together.
         self.bulk_checkbox_update = True
         try:
             for table_row_idx, row_location in enumerate(self.table_row_location_values):

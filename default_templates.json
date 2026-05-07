@@ -84,7 +84,22 @@
       "drop": [],
       "rename": {},
       "order": ["TASK_ID", "Aisle"],
+      "columns_last": [],
       "sort_by": [["Aisle", "asc"], ["TASK_ID", "asc"]],
+      "location_columns": [],
+      "highlights": [],
+      "builtin": true
+    },
+    {
+      "name": "Export - Tasks Assigned to LOCKED",
+      "description": "Task export for LOCKED locations. Moves the Task column to the end of the table.",
+      "filename_patterns": ["*Export-Tasks assigned to LOCKED*", "*export*tasks*assigned*locked*"],
+      "required_columns": ["Task"],
+      "drop": [],
+      "rename": {},
+      "order": [],
+      "columns_last": ["Task"],
+      "sort_by": [],
       "location_columns": [],
       "highlights": [],
       "builtin": true

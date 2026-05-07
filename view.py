@@ -83,10 +83,12 @@ def apply_template(
         out = out.rename(columns={k: v for k, v in template.rename.items() if k in out.columns})
 
     # 3. Reorder
-    if template.order:
-        present_in_order = [c for c in template.order if c in out.columns]
-        remaining = [c for c in out.columns if c not in present_in_order]
-        out = out[present_in_order + remaining]
+    last_set = set(template.columns_last) if template.columns_last else set()
+    if template.order or last_set:
+        present_in_order = [c for c in template.order if c in out.columns and c not in last_set]
+        remaining = [c for c in out.columns if c not in present_in_order and c not in last_set]
+        tail = [c for c in template.columns_last if c in out.columns]
+        out = out[present_in_order + remaining + tail]
 
     # 4. Sort
     location_col = _find_location_column(out.columns, template.location_columns)

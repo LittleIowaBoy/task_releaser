@@ -99,6 +99,7 @@ class Template:
     drop: List[str] = field(default_factory=list)
     rename: dict = field(default_factory=dict)
     order: List[str] = field(default_factory=list)
+    columns_last: List[str] = field(default_factory=list)  # pushed to end after order
     sort_by: List[List[Any]] = field(default_factory=list)  # [[col, "asc"|"desc"], ...]
     location_columns: List[str] = field(default_factory=list)
     highlights: List[HighlightRule] = field(default_factory=list)
@@ -114,6 +115,7 @@ class Template:
             drop=list(data.get("drop", [])),
             rename=dict(data.get("rename", {})),
             order=list(data.get("order", [])),
+            columns_last=list(data.get("columns_last", [])),
             sort_by=[list(s) for s in data.get("sort_by", [])],
             location_columns=list(data.get("location_columns", [])),
             highlights=[HighlightRule.from_dict(h) for h in data.get("highlights", [])],
