@@ -1,49 +1,70 @@
 # DocuReader
 
-**Version: 0.3.0**
+**Version: 0.4.0**
 
 Inventory DocuReader is a PyQt6 GUI and Excel/CSV parser for inventory analysis
 and replenishment workflows.
 
 ## Features
-- Load CSV/XLSX/XLS files from Downloads.
-- **Template-driven views**: column drop / rename / reorder / sort and
-  conditional cell highlighting are all defined per file category in JSON.
-  Built-in templates ship for Replenishment Audit, Chase Tasks, and
-  Locked Full Container reports; users can author their own without
-  changing any code.
-- Auto-detection of the right template based on filename pattern + column
-  signature (longest-required-columns wins; tie-break by `priority`).
-- Multi-sheet Excel workbooks prompt for the sheet to load (last choice
-  remembered per file).
+
+- **Load CSV/XLSX/XLS files** from your Downloads folder. The most recent files
+  are listed first.
+- **Multi-document parsing**: select one primary file and add as many additional
+  files as you need using the **Add files...** button. All files are concatenated
+  into a single dataset before analysis — useful when monitoring multiple towers
+  (e.g. East and West) at the same time. Rows and task IDs from all files are
+  combined automatically.
+- **Two analysis modes**:
+  - *Chase Tasks Needing Released* — compares Active OHB vs Allocated across all
+    selected files and returns the combined list of task IDs ready to release,
+    plus a summary of items that still need replenishment.
+  - *The Whole Table* — displays every row across all selected files with
+    template-driven column ordering, sorting, and conditional cell highlights.
+- **Template-driven views**: column drop / rename / reorder / `columns_last`
+  (pin specific columns to the far right) / sort and conditional cell
+  highlighting are all defined per file category in JSON. Built-in templates
+  ship for:
+  - Replenishment Audit
+  - Chase Tasks (Active OHB / Allocated)
+  - Locked Full Container Chase Tasks
+  - Export – Tasks Assigned to LOCKED *(new in 0.4.0 — moves the Task column
+    to the last position before the Done? column)*
+  - Users can author their own templates without changing any code.
+- **Auto-detection** of the right template based on filename glob pattern and
+  column signature (longest `required_columns` match wins).
+- **Multi-sheet Excel workbooks** prompt for the sheet to load; the last choice
+  is remembered per file.
+- **Done? checkbox column** in The Whole Table view. Checking a row marks it
+  with red strikethrough. For files that have a `location_columns` field set,
+  checking any row in a location group marks the entire group at once. Works
+  for all document types, including task exports that have no location column.
 - **Export view...** writes the currently displayed table to CSV or XLSX,
   preserving template highlights as openpyxl cell fills.
-- **Auto-update from GitHub Releases**: when running the frozen build, the
-  in-app "Check & Install Updates" button downloads the latest signed ZIP,
-  verifies its SHA-256, stages it under `%LOCALAPPDATA%\DocuReader\updates\`,
-  and swaps the install on next start. No admin / UAC prompt.
+- **Batch export** applies each file's matched template and writes one
+  `.view.xlsx` per source file to a chosen output folder.
+- **Auto-update from GitHub Releases**: the in-app **Check & Install Updates**
+  button downloads the latest signed ZIP, verifies its SHA-256, and stages it
+  for installation. No admin / UAC prompt required.
 
 ## Installation
+
+### Windows portable (recommended for end users)
+
+1. Download `DocuReader-<version>-portable.zip` from the
+   [Releases page](https://github.com/LittleIowaBoy/task_releaser/releases).
+2. Right-click the ZIP and extract it.
+3. Open the extracted folder and run **`install-docureader.bat`** (or
+   `install-docureader.ps1` in PowerShell).
+   - Installs to `%LOCALAPPDATA%\Programs\DocuReader` — no admin rights needed.
+   - Creates Start Menu and Desktop shortcuts automatically.
+4. Launch **DocuReader** from the Start Menu or Desktop shortcut.
+
+> Older installs located at `%ProgramFiles%\DocuReader` are auto-migrated to the
+> per-user path on first launch so that automatic updates can run without UAC.
 
 ### From source
 ```bash
 pip install docureader
-```
-
-### Windows portable
-1. Download `DocuReader-<version>-portable.zip` from the
-   [Releases page](https://github.com/LittleIowaBoy/task_releaser/releases).
-2. Extract anywhere (or use `install-docureader.bat` for a per-user install).
-3. Run `DocuReader.exe`.
-
-`install-docureader.bat` / `install-docureader.ps1` install to
-`%LOCALAPPDATA%\Programs\DocuReader` (no admin required) and create Start
-Menu + Desktop shortcuts. Older admin installs at `%ProgramFiles%\DocuReader`
-are auto-migrated to the new path on first launch.
-
-## Usage
-
-```bash
 docureader
 ```
 
@@ -51,6 +72,84 @@ docureader
 - Python 3.10+
 - PyQt6 >= 6.5
 - pandas >= 2.0, openpyxl >= 3.1, xlrd >= 2.0
+
+## Templates
+
+Bundled defaults live in [default_templates.json](default_templates.json).
+Per-user overrides are stored at `~/.docureader/templates.json`. New bundled
+templates added in future releases are merged in by name without overwriting
+any user-edited template.
+
+Edit templates in-app via the **Templates...** button (raw-JSON editor with
+new / delete / import / export). A template is a JSON object like:
+
+```jsonc
+{
+  "name": "My Report",
+  "filename_patterns": ["*MyReport*.xlsx"],
+  "required_columns": ["Task ID", "Item"],
+  "drop": ["Notes"],
+  "rename": {"Task ID": "TASK_ID"},
+  "order": ["TASK_ID", "Item", "Quantity"],
+  "columns_last": ["Task"],
+  "sort_by": [["TASK_ID", "asc"]],
+  "location_columns": ["Bin", "Aisle"],
+  "highlights": [
+    {
+      "name": "OK status",
+      "when": "Status == 'OK'",
+      "target_columns": ["Status"],
+      "color": "darkgreen",
+      "priority": 10
+    }
+  ]
+}
+```
+
+| Field | Purpose |
+|---|---|
+| `filename_patterns` | Glob patterns matched against the loaded filename |
+| `required_columns` | Columns that must be present for this template to match |
+| `drop` | Columns to remove before display |
+| `rename` | Mapping of old → new column names |
+| `order` | Preferred column order (unspecified columns follow in original order) |
+| `columns_last` | Columns pinned to the far right, after all other columns |
+| `sort_by` | `[["column", "asc\|desc"], ...]` pairs |
+| `location_columns` | Enables location-aware natural sort and divider rows |
+| `highlights` | Conditional formatting rules (see below) |
+
+`columns_last` and `order` can be combined. Columns in `columns_last` are
+excluded from the `order` pass and appended after all remaining columns.
+
+## Updating
+
+### Frozen install — end users
+Click **Check & Install Updates** in the app. The updater will:
+1. Query the GitHub Releases API for the latest version.
+2. Download `DocuReader-<version>-portable.zip` and `SHA256SUMS.txt`.
+3. Verify the SHA-256 checksum (refuses the update if it doesn't match).
+4. Stage the new files under `%LOCALAPPDATA%\DocuReader\updates\`.
+5. On next launch, replace the running install with the new version.
+
+To include pre-release / beta builds, tick **Include pre-releases** next to
+the update button before clicking it.
+
+Command-line equivalent (run from the install folder):
+```
+update_github.exe --check-only          # print available version only
+update_github.exe --yes                 # update without confirmation prompt
+update_github.exe --include-prereleases # include beta / RC releases
+```
+
+### Source checkout — developers
+```bash
+python update.py           # pull latest release tag and rebuild
+python update.py --check-only
+python update.py --yes
+python update.py --allow-dirty
+python update.py --force-rebuild
+python update.py --rollback
+```
 
 ## Building Windows binaries
 
@@ -60,67 +159,10 @@ python rebuild_and_package.py
 ```
 
 Outputs:
-- `freeze_build/cx_freeze/DocuReader.exe`
-- `freeze_build/cx_freeze/update.exe` (git-based dev updater)
-- `freeze_build/cx_freeze/update_github.exe` (GitHub Releases updater)
+- `freeze_build/DocuReader/DocuReader.exe`
+- `freeze_build/DocuReader/update_github.exe`
 - `DocuReader-<version>-portable.zip`
 - `SHA256SUMS.txt`
-
-## Templates
-
-Bundled defaults live in [default_templates.json](default_templates.json).
-Per-user overrides are stored at `~/.docureader/templates.json`. New
-bundled templates added in future releases are merged in by name without
-overwriting any user-edited template.
-
-Edit templates in-app via the **Templates...** button (raw-JSON editor with
-new/delete/import/export). A template is a JSON object like:
-
-```jsonc
-{
-  "name": "My Report",
-  "filename_patterns": ["*MyReport*.xlsx"],
-  "required_columns": ["Task ID", "Item"],
-  "drop_columns": ["Notes"],
-  "rename_columns": {"Task ID": "TASK_ID"},
-  "column_order": ["TASK_ID", "Item", "Quantity"],
-  "sort_by": ["TASK_ID"],
-  "location_columns": ["Bin", "Aisle"],
-  "highlights": [
-    { "color": "darkgreen", "column": "Status", "operator": "==", "value": "OK" }
-  ]
-}
-```
-
-`location_columns` enables location-aware sort + visual divider rows.
-
-## Updating
-
-### Frozen install (recommended for end users)
-Click **Check & Install Updates** in the GUI, or run:
-```bash
-update_github.exe --check-only
-update_github.exe --yes
-update_github.exe --include-prereleases
-```
-Updates are SHA-256 verified against `SHA256SUMS.txt` published with each
-release. An update with a missing or mismatched checksum is refused.
-
-### Source checkout
-```bash
-python update.py --check-only
-python update.py
-```
-The git-based updater may reset the repo to a release tag.
-- `--yes` skip the confirmation prompt.
-- `--allow-dirty` allow updates with uncommitted local changes.
-- `--force-rebuild` rebuild even when no source changes are detected.
-- `--rollback` restore latest backup.
-
-### Console scripts
-- `docureader` launches the GUI.
-- `docureader-update` runs the source / git updater.
-- `docureader-update-github` runs the GitHub Releases updater.
 
 ## Tests
 
@@ -130,16 +172,47 @@ python -m pytest tests -q
 ```
 
 ## Developer Release Process
+
 The version lives in a single file: [_version.py](_version.py). Bump it,
-commit, tag, push:
+commit, tag, and push:
 
 ```bash
-git tag -a v0.3.0 -m "Release 0.3.0"
-git push origin v0.3.0
+# edit _version.py
+git add _version.py
+git commit -m "vX.Y.Z: <summary>"
+git tag vX.Y.Z
+git push
+git push origin vX.Y.Z
 ```
 
 The [.github/workflows/release.yml](.github/workflows/release.yml) workflow
-runs on the tag push, builds the Windows portable ZIP via
+fires on the tag push, builds the Windows portable ZIP via
 `rebuild_and_package.py`, computes `SHA256SUMS.txt`, and attaches both to a
 GitHub Release. Existing installs pick the new release up automatically the
 next time a user clicks **Check & Install Updates**.
+
+## Changelog
+
+### 0.4.0
+- **Multi-document parsing**: add extra files alongside the primary selection;
+  all files are concatenated before analysis. Enables east + west tower
+  parsing in a single run.
+- **Renamed** the checkbox column from *Counted?* to *Done?*.
+- **Fixed** strikethrough not applying for document types without a location
+  column (e.g. task exports).
+- **New template field** `columns_last`: pins named columns to the rightmost
+  position in the table, before the *Done?* column.
+- **New built-in template** *Export – Tasks Assigned to LOCKED*: matches
+  `Export-Tasks assigned to LOCKED` filenames and moves the Task column last.
+
+### 0.3.0
+- Template system with JSON-defined column ordering, sorting, highlights.
+- GitHub Releases auto-updater with SHA-256 verification.
+- Per-user install path; auto-migration from legacy `%ProgramFiles%` location.
+- Multi-sheet workbook support with remembered sheet selection.
+- Batch export mode.
+
+### 0.2.x
+- Locked Full Container Chase Tasks support.
+- Location-aware natural sort with divider rows.
+- Theme-aware strikethrough restore.
