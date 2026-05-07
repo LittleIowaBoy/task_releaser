@@ -1,6 +1,6 @@
 # DocuReader
 
-**Version: 0.4.0**
+**Version: 0.5.0**
 
 Inventory DocuReader is a PyQt6 GUI and Excel/CSV parser for inventory analysis
 and replenishment workflows.
@@ -42,8 +42,8 @@ and replenishment workflows.
   preserving template highlights as openpyxl cell fills.
 - **Batch export** applies each file's matched template and writes one
   `.view.xlsx` per source file to a chosen output folder.
-- **Auto-update from GitHub Releases**: the in-app **Check & Install Updates**
-  button downloads the latest signed ZIP, verifies its SHA-256, and stages it
+- **Auto-update from GitHub Releases**: the in-app **Tools → Check & Install Updates**
+  menu item downloads the latest signed ZIP, verifies its SHA-256, and stages it
   for installation. No admin / UAC prompt required.
 
 ## Installation
@@ -80,7 +80,7 @@ Per-user overrides are stored at `~/.docureader/templates.json`. New bundled
 templates added in future releases are merged in by name without overwriting
 any user-edited template.
 
-Edit templates in-app via the **Templates...** button (raw-JSON editor with
+Edit templates in-app via **Tools → Templates...** (raw-JSON editor with
 new / delete / import / export). A template is a JSON object like:
 
 ```jsonc
@@ -131,8 +131,8 @@ Click **Check & Install Updates** in the app. The updater will:
 4. Stage the new files under `%LOCALAPPDATA%\DocuReader\updates\`.
 5. On next launch, replace the running install with the new version.
 
-To include pre-release / beta builds, tick **Include pre-releases** next to
-the update button before clicking it.
+To include pre-release / beta builds, tick **Tools → Include Pre-Releases**
+before triggering the update.
 
 Command-line equivalent (run from the install folder):
 ```
@@ -192,6 +192,26 @@ GitHub Release. Existing installs pick the new release up automatically the
 next time a user clicks **Check & Install Updates**.
 
 ## Changelog
+
+### 0.5.0
+- **Tools menu**: moved *Check & Install Updates*, *Include Pre-Releases*,
+  *Templates...*, *Export View...*, *Batch Export*, and *Terminate* off the
+  main window and into a **Tools** drop-down on the menu bar. The button row
+  is now much narrower.
+- **Responsive window sizing**: the initial window is sized as a percentage of
+  the user's available screen area and centered precisely after the window
+  frame is established, so it never opens off-screen.
+- **Collapsible log pane**: raw activity output is hidden by default. Click
+  **Show Log** in the button row to expand a 150 px log pane beneath the
+  table; click **Hide Log** to collapse it again.
+- **Cleaner log output**: technical details (row/column counts, column name
+  lists, template match reasons) are no longer written to the log. The log
+  now shows only user-relevant messages: file names loaded, detected template,
+  replenishment summary, and errors.
+- **Status banner**: the status label is now centered, bold, and italic —
+  acting as a top-of-window activity indicator.
+- **Undo / Redo** (10 steps, Ctrl+Z / Ctrl+Y): tracks both checkbox toggles
+  and cell-text edits made in the table.
 
 ### 0.4.0
 - **Multi-document parsing**: add extra files alongside the primary selection;

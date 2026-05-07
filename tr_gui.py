@@ -1,16 +1,17 @@
 import sys
+from collections import deque
 import pandas as pd
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QTextEdit, QLabel, QComboBox, QMessageBox, QSplitter,
+    QPushButton, QTextEdit, QLabel, QComboBox, QMessageBox,
     QTableWidget, QTableWidgetItem, QCheckBox, QDialog, QDialogButtonBox,
     QListWidget, QListWidgetItem, QLineEdit, QFormLayout, QPlainTextEdit,
     QFileDialog, QInputDialog
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QProcess, QSettings
-from PyQt6.QtGui import QFont, QTextDocument, QTextCursor, QColor
+from PyQt6.QtGui import QFont, QTextDocument, QTextCursor, QColor, QAction
 from tr import ExcelParser
 from _version import __version__
 from templates import (
@@ -23,6 +24,70 @@ from view import ViewMeta, apply_template, parse_location_parts
 
 
 import json as _json
+
+
+# ---------------------------------------------------------------------------
+# Edit history (undo / redo)
+# ---------------------------------------------------------------------------
+
+UNDO_HISTORY_LIMIT = 10  # number of undoable steps to keep in memory
+
+
+class _CheckboxEdit:
+    """Records one user checkbox click (may affect multiple rows via location grouping)."""
+    __slots__ = ("affected",)
+
+    def __init__(self, affected):
+        # [(table_row_idx, old_checked, new_checked), ...]
+        self.affected = affected
+
+
+class _CellTextEdit:
+    """Records a single cell-text change made by the user."""
+    __slots__ = ("row", "col", "old_text", "new_text")
+
+    def __init__(self, row: int, col: int, old_text: str, new_text: str):
+        self.row = row
+        self.col = col
+        self.old_text = old_text
+        self.new_text = new_text
+
+
+class _EditHistory:
+    """Fixed-size undo / redo stack for table edits."""
+
+    def __init__(self, limit: int = UNDO_HISTORY_LIMIT) -> None:
+        self._undo: deque = deque(maxlen=limit)
+        self._redo: deque = deque()
+
+    def push(self, edit) -> None:
+        """Record a new edit; clears the redo stack."""
+        self._undo.append(edit)
+        self._redo.clear()
+
+    def undo(self):
+        if not self._undo:
+            return None
+        edit = self._undo.pop()
+        self._redo.append(edit)
+        return edit
+
+    def redo(self):
+        if not self._redo:
+            return None
+        edit = self._redo.pop()
+        self._undo.append(edit)
+        return edit
+
+    def can_undo(self) -> bool:
+        return bool(self._undo)
+
+    def can_redo(self) -> bool:
+        return bool(self._redo)
+
+    def clear(self) -> None:
+        self._undo.clear()
+        self._redo.clear()
 
 
 class TemplatesDialog(QDialog):
@@ -295,12 +360,7 @@ class WorkerThread(QThread):
                 if parser.df is None:
                     self.error.emit(f"Failed to load {Path(fp).name}")
                     return
-                extension = Path(fp).suffix.lower()
-                file_type = "CSV" if extension == ".csv" else "Excel"
-                self.output.emit(
-                    f"Loaded {file_type} '{Path(fp).name}': {len(parser.df)} rows, "
-                    f"{len(parser.df.columns)} columns\n"
-                )
+                self.output.emit(f"Loaded '{Path(fp).name}'\n")
                 all_dfs.append(parser.df)
 
             if len(all_dfs) == 1:
@@ -308,15 +368,13 @@ class WorkerThread(QThread):
             else:
                 combined_df = pd.concat(all_dfs, ignore_index=True)
                 self.output.emit(
-                    f"Combined {len(self.filepaths)} files: {len(combined_df)} total rows\n"
+                    f"Combined {len(self.filepaths)} files into one dataset\n"
                 )
-
-            self.output.emit(f"Columns: {list(combined_df.columns)}\n")
 
             # Match template using the primary file's name and the combined columns.
             match = self.registry.select(combined_df.columns, self.filepath)
             self.matched_template = match.template
-            self.output.emit(f"Detected template: {match.template.name}  ({match.reason})\n")
+            self.output.emit(f"Detected template: {match.template.name}\n")
             self.template_matched.emit(match.template.name, match.reason)
 
             # Build a single parser whose .df is the combined data so that
@@ -346,11 +404,8 @@ class WorkerThread(QThread):
                 # Special-case the Locked Full Container template (was an inline
                 # column-set sniff in tr.py / tr_gui.py; now driven by template name).
                 if template_name == "Locked Full Container Chase Tasks":
-                    self.output.emit("\n--- Item Condition Summary ---\n")
-                    self.output.emit("Not applicable for Locked Full Container Chase Tasks.\n")
                     task_ids = self.parser.get_unique_numeric_values("TASK_ID")
-                    self.output.emit("\n--- All Task IDs (TASK_ID/Aisle input) ---\n")
-                    self.output.emit(f"{task_ids}\n")
+                    self.output.emit(f"Task IDs found: {task_ids}\n")
                     items_df = pd.DataFrame(columns=["Item", "Affected Task ID Count"])
                     self.table_ready.emit(items_df, ViewMeta(template_name=template_name))
                     self.task_ids_ready.emit(task_ids)
@@ -364,15 +419,14 @@ class WorkerThread(QThread):
                     item_col="Item",
                 )
 
-                self.output.emit("\n--- Items that need Replenishment Task (Active OHB < Allocated) ---\n")
+                self.output.emit("Items still needing replenishment:\n")
                 if items_not_met:
                     for item, task_id_count in sorted(items_not_met.items(), key=lambda x: x[1], reverse=True):
-                        self.output.emit(f"  {item}: affects {task_id_count} Task ID(s)\n")
+                        self.output.emit(f"  {item}: {task_id_count} task(s)\n")
                 else:
-                    self.output.emit("No items found in Task IDs that don't meet the condition.\n")
+                    self.output.emit("  None — all items are stocked.\n")
 
-                self.output.emit("\n--- Tasks that need Released (Active OHB >= Allocated) ---\n")
-                self.output.emit(f"{task_ids}\n")
+                self.output.emit(f"Tasks ready to release: {task_ids}\n")
 
                 if items_not_met:
                     sorted_items = sorted(items_not_met.items(), key=lambda x: x[1], reverse=True)
@@ -384,9 +438,8 @@ class WorkerThread(QThread):
                 self.task_ids_ready.emit(task_ids)
 
             elif self.function_name == "display_all":
-                self.output.emit("\n--- All Data ---\n")
                 if template is None:
-                    self.output.emit("No template matched; showing raw data.\n")
+                    self.output.emit("No template matched — showing raw data.\n")
                     self.table_ready.emit(self.parser.df.reset_index(drop=True), ViewMeta())
                     return
                 prepared_df, meta = apply_template(self.parser.df, template)
@@ -418,13 +471,59 @@ class ExcelParserGUI(QMainWindow):
         self.settings = QSettings("DocuReader", "DocuReader")
         self.view_df: Optional[pd.DataFrame] = None
         self.view_meta: Optional[ViewMeta] = None
+        self._edit_history = _EditHistory()
+        self._suppressing_history = False
+        self._pre_edit_text: Dict[Tuple[int, int], str] = {}
         self.init_ui()
     
     def init_ui(self):
         """Initialize the user interface"""
         self.setWindowTitle("Lomar Inventory Control - DocuReader")
-        self.setGeometry(100, 100, 1000, 600)
-        
+        screen = QApplication.primaryScreen().availableGeometry()
+        w = int(screen.width() * 0.58)
+        h = int(screen.height() * 0.88)
+        self.resize(w, h)
+
+        # ----- Menu bar -----
+        tools_menu = self.menuBar().addMenu("&Tools")
+
+        self.update_action = QAction("Check && Install Updates", self)
+        self.update_action.triggered.connect(self.check_for_updates)
+        tools_menu.addAction(self.update_action)
+
+        self.prerelease_action = QAction("Include Pre-Releases", self)
+        self.prerelease_action.setCheckable(True)
+        self.prerelease_action.setChecked(
+            self.settings.value("updater/include_prereleases", False, type=bool)
+        )
+        self.prerelease_action.toggled.connect(
+            lambda v: self.settings.setValue("updater/include_prereleases", bool(v))
+        )
+        tools_menu.addAction(self.prerelease_action)
+
+        tools_menu.addSeparator()
+
+        templates_action = QAction("Templates...", self)
+        templates_action.triggered.connect(self.open_templates_dialog)
+        tools_menu.addAction(templates_action)
+
+        tools_menu.addSeparator()
+
+        self.export_action = QAction("Export View...", self)
+        self.export_action.triggered.connect(self.export_view)
+        self.export_action.setEnabled(False)
+        tools_menu.addAction(self.export_action)
+
+        batch_action = QAction("Batch Export...", self)
+        batch_action.triggered.connect(self.batch_export)
+        tools_menu.addAction(batch_action)
+
+        tools_menu.addSeparator()
+
+        terminate_action = QAction("Terminate", self)
+        terminate_action.triggered.connect(self.terminate_program)
+        tools_menu.addAction(terminate_action)
+
         # Create central widget
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -440,8 +539,12 @@ class ExcelParserGUI(QMainWindow):
         title.setFont(title_font)
         main_layout.addWidget(title)
         
-        # Status label (initialize early before populate_downloads_files)
+        # Status banner — centered at the top, shows user-relevant activity messages.
         self.status_label = QLabel("Ready")
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status_label.setStyleSheet(
+            "QLabel { font-style: italic; font-weight: bold; color: #444; padding: 3px 0; }"
+        )
         main_layout.addWidget(self.status_label)
         
         # File selection section
@@ -519,71 +622,49 @@ class ExcelParserGUI(QMainWindow):
         self.clear_button.clicked.connect(self.clear_output)
         button_layout.addWidget(self.clear_button)
 
-        self.update_button = QPushButton("Check & Install Updates")
-        self.update_button.clicked.connect(self.check_for_updates)
-        self.update_button.setStyleSheet("QPushButton { background-color: #4caf50; color: white; font-weight: bold; }")
-        button_layout.addWidget(self.update_button)
-
-        # Channel toggle - persisted via QSettings.
-        self.prerelease_checkbox = QCheckBox("Include pre-releases")
-        self.prerelease_checkbox.setToolTip(
-            "When checked, the updater will also offer release candidates / beta tags."
+        self.log_toggle_button = QPushButton("Show Log")
+        self.log_toggle_button.setCheckable(True)
+        self.log_toggle_button.setToolTip(
+            "Show or hide the raw activity log (technical details)."
         )
-        self.prerelease_checkbox.setChecked(
-            self.settings.value("updater/include_prereleases", False, type=bool)
-        )
-        self.prerelease_checkbox.toggled.connect(
-            lambda v: self.settings.setValue("updater/include_prereleases", bool(v))
-        )
-        button_layout.addWidget(self.prerelease_checkbox)
+        self.log_toggle_button.toggled.connect(self._toggle_log)
+        button_layout.addWidget(self.log_toggle_button)
 
-        self.templates_button = QPushButton("Templates...")
-        self.templates_button.clicked.connect(self.open_templates_dialog)
-        button_layout.addWidget(self.templates_button)
+        self.undo_button = QPushButton("Undo")
+        self.undo_button.setToolTip(f"Undo last table edit  (Ctrl+Z) — remembers up to {UNDO_HISTORY_LIMIT} steps")
+        self.undo_button.setShortcut("Ctrl+Z")
+        self.undo_button.clicked.connect(self._undo_edit)
+        self.undo_button.setEnabled(False)
+        button_layout.addWidget(self.undo_button)
 
-        self.export_button = QPushButton("Export view...")
-        self.export_button.clicked.connect(self.export_view)
-        self.export_button.setEnabled(False)
-        button_layout.addWidget(self.export_button)
+        self.redo_button = QPushButton("Redo")
+        self.redo_button.setToolTip("Redo last undone edit  (Ctrl+Y)")
+        self.redo_button.setShortcut("Ctrl+Y")
+        self.redo_button.clicked.connect(self._redo_edit)
+        self.redo_button.setEnabled(False)
+        button_layout.addWidget(self.redo_button)
 
-        self.batch_button = QPushButton("Batch export...")
-        self.batch_button.clicked.connect(self.batch_export)
-        self.batch_button.setToolTip(
-            "Pick multiple CSV/XLSX files, apply each file's matched template, "
-            "and write one templated .xlsx per source file to a chosen folder."
-        )
-        button_layout.addWidget(self.batch_button)
-        
-        self.terminate_button = QPushButton("Terminate")
-        self.terminate_button.clicked.connect(self.terminate_program)
-        self.terminate_button.setStyleSheet("QPushButton { background-color: #ff6b6b; color: white; font-weight: bold; }")
-        button_layout.addWidget(self.terminate_button)
+
         
         main_layout.addLayout(button_layout)
-        
-        # Output display
-        output_label = QLabel("Analysis Output:")
-        main_layout.addWidget(output_label)
-        
-        # Create a splitter for logs and table
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        
-        # Text output for logs
+
+        # Table widget — fills all remaining vertical space.
+        self.table_widget = QTableWidget()
+        self.table_widget.setColumnCount(0)
+        self.table_widget.setRowCount(0)
+        self.table_widget.currentItemChanged.connect(self._on_current_item_changed)
+        self.table_widget.itemChanged.connect(self._on_cell_text_changed)
+        main_layout.addWidget(self.table_widget, 1)  # stretch=1
+
+        # Log pane — hidden by default; revealed via the "Show Log" toggle button.
         self.output_text = QTextEdit()
         self.output_text.setReadOnly(True)
         monospace_font = QFont("Courier New", 9)
         monospace_font.setFixedPitch(True)
         self.output_text.setFont(monospace_font)
-        self.output_text.setMaximumHeight(100)
-        splitter.addWidget(self.output_text)
-        
-        # Table widget for data display
-        self.table_widget = QTableWidget()
-        self.table_widget.setColumnCount(0)
-        self.table_widget.setRowCount(0)
-        splitter.addWidget(self.table_widget)
-        
-        main_layout.addWidget(splitter)
+        self.output_text.setFixedHeight(150)
+        self.output_text.hide()
+        main_layout.addWidget(self.output_text)
         
         # Set layout
         central_widget.setLayout(main_layout)
@@ -695,11 +776,9 @@ class ExcelParserGUI(QMainWindow):
 
         file_count = len(all_filepaths)
         if file_count > 1:
-            self.status_label.setText(f"Processing {file_count} files... please wait")
-            self.output_text.append(f"Starting analysis of {file_count} files...\n")
+            self.status_label.setText(f"Analyzing {file_count} files...")
         else:
-            self.status_label.setText("Processing... please wait")
-            self.output_text.append("Starting analysis...\n")
+            self.status_label.setText("Analyzing...")
 
         # Create and start worker thread
         self.worker_thread = WorkerThread(all_filepaths, selected_function, self.registry, sheet_names=sheet_names)
@@ -751,11 +830,13 @@ class ExcelParserGUI(QMainWindow):
             self.output_text.append("No data to display in table.\n")
             return
 
+        self._suppressing_history = True
+
         # Remember the view-shaped df + highlights so "Export view..." can
         # write exactly what the user is looking at.
         self.view_df = df.copy()
         self.view_meta = meta
-        self.export_button.setEnabled(True)
+        self.export_action.setEnabled(True)
 
         self.strikethrough_rows.clear()
 
@@ -826,15 +907,17 @@ class ExcelParserGUI(QMainWindow):
             checkbox.stateChanged.connect(lambda checked, r=row_idx: self.on_checkbox_changed(r, checked))
             self.table_widget.setCellWidget(row_idx, len(df.columns), checkbox)
 
+        self._suppressing_history = False
+        self._edit_history.clear()
+        self._update_undo_redo_buttons()
         self.table_widget.resizeColumnsToContents()
         header = self.table_widget.horizontalHeader()
         if header is not None:
             header.setStretchLastSection(True)
-        self.output_text.append(f"Table loaded with {len(df)} rows and {len(df.columns)} columns.\n")
     
     def on_checkbox_changed(self, row_idx: int, state):
-        """Handle checkbox state change - apply/remove strikethrough on row"""
-        if self.bulk_checkbox_update:
+        """Handle checkbox state change — apply/remove strikethrough and record for undo."""
+        if self.bulk_checkbox_update or self._suppressing_history:
             return
 
         is_checked = state == 2  # Qt.CheckState.Checked is 2
@@ -849,26 +932,107 @@ class ExcelParserGUI(QMainWindow):
         if isinstance(self.table_row_location_values, list) and row_idx < len(self.table_row_location_values):
             location_value = self.table_row_location_values[row_idx]
 
-        # No location grouping — apply strikethrough only to this single row.
-        if location_value is None:
-            self.apply_row_strikethrough(row_idx, is_checked)
-            return
+        self._suppressing_history = True
+        try:
+            if location_value is None:
+                # Single-row edit — checkbox already flipped to is_checked.
+                affected = [(row_idx, not is_checked, is_checked)]
+                self.apply_row_strikethrough(row_idx, is_checked)
+            else:
+                # Location group — bulk-update every row sharing this location.
+                affected = []
+                self.bulk_checkbox_update = True
+                try:
+                    for tidx, row_loc in enumerate(self.table_row_location_values):
+                        if row_loc != location_value:
+                            continue
+                        checkbox = self.table_widget.cellWidget(tidx, self.table_widget.columnCount() - 1)
+                        if isinstance(checkbox, QCheckBox):
+                            # Primary row already flipped; others haven't changed yet.
+                            old = (not is_checked) if tidx == row_idx else checkbox.isChecked()
+                            affected.append((tidx, old, is_checked))
+                            if checkbox.isChecked() != is_checked:
+                                checkbox.setChecked(is_checked)
+                        self.apply_row_strikethrough(tidx, is_checked)
+                finally:
+                    self.bulk_checkbox_update = False
+        finally:
+            self._suppressing_history = False
 
-        # Location grouping present — update every row that shares the same
-        # location prefix so the whole group is ticked/unticked together.
+        self._edit_history.push(_CheckboxEdit(affected))
+        self._update_undo_redo_buttons()
+
+    def _on_current_item_changed(self, current, previous):
+        """Cache the current cell text when focus moves, so undo can restore it."""
+        if current is not None and not self._suppressing_history:
+            self._pre_edit_text[(current.row(), current.column())] = current.text()
+
+    def _on_cell_text_changed(self, item):
+        """Record a user-driven cell text change to the undo history."""
+        if self._suppressing_history:
+            return
+        key = (item.row(), item.column())
+        old_text = self._pre_edit_text.get(key)
+        if old_text is not None and item.text() != old_text:
+            self._edit_history.push(_CellTextEdit(
+                row=item.row(), col=item.column(),
+                old_text=old_text, new_text=item.text(),
+            ))
+            self._pre_edit_text[key] = item.text()
+            self._update_undo_redo_buttons()
+
+    def _undo_edit(self):
+        """Undo the most recent table edit."""
+        edit = self._edit_history.undo()
+        if edit is None:
+            return
+        self._suppressing_history = True
         self.bulk_checkbox_update = True
         try:
-            for table_row_idx, row_location in enumerate(self.table_row_location_values):
-                if row_location != location_value:
-                    continue
-
-                checkbox = self.table_widget.cellWidget(table_row_idx, self.table_widget.columnCount() - 1)
-                if isinstance(checkbox, QCheckBox) and checkbox.isChecked() != is_checked:
-                    checkbox.setChecked(is_checked)
-
-                self.apply_row_strikethrough(table_row_idx, is_checked)
+            if isinstance(edit, _CheckboxEdit):
+                for tidx, old_checked, _new in edit.affected:
+                    cb = self.table_widget.cellWidget(tidx, self.table_widget.columnCount() - 1)
+                    if isinstance(cb, QCheckBox):
+                        cb.setChecked(old_checked)
+                    self.apply_row_strikethrough(tidx, old_checked)
+            elif isinstance(edit, _CellTextEdit):
+                item = self.table_widget.item(edit.row, edit.col)
+                if item:
+                    item.setText(edit.old_text)
+                    self._pre_edit_text[(edit.row, edit.col)] = edit.old_text
         finally:
+            self._suppressing_history = False
             self.bulk_checkbox_update = False
+        self._update_undo_redo_buttons()
+
+    def _redo_edit(self):
+        """Reapply the most recently undone table edit."""
+        edit = self._edit_history.redo()
+        if edit is None:
+            return
+        self._suppressing_history = True
+        self.bulk_checkbox_update = True
+        try:
+            if isinstance(edit, _CheckboxEdit):
+                for tidx, _old, new_checked in edit.affected:
+                    cb = self.table_widget.cellWidget(tidx, self.table_widget.columnCount() - 1)
+                    if isinstance(cb, QCheckBox):
+                        cb.setChecked(new_checked)
+                    self.apply_row_strikethrough(tidx, new_checked)
+            elif isinstance(edit, _CellTextEdit):
+                item = self.table_widget.item(edit.row, edit.col)
+                if item:
+                    item.setText(edit.new_text)
+                    self._pre_edit_text[(edit.row, edit.col)] = edit.new_text
+        finally:
+            self._suppressing_history = False
+            self.bulk_checkbox_update = False
+        self._update_undo_redo_buttons()
+
+    def _update_undo_redo_buttons(self):
+        """Sync Undo / Redo button enabled state to the history stacks."""
+        self.undo_button.setEnabled(self._edit_history.can_undo())
+        self.redo_button.setEnabled(self._edit_history.can_redo())
 
     def apply_row_strikethrough(self, row_idx: int, is_checked: bool):
         """Apply or remove strikethrough for a table row."""
@@ -925,7 +1089,7 @@ class ExcelParserGUI(QMainWindow):
     def on_data_loaded(self, df: pd.DataFrame):
         """Handle data loaded from worker thread"""
         self.current_df = df
-        self.export_button.setEnabled(df is not None and not df.empty)
+        self.export_action.setEnabled(df is not None and not df.empty)
     
     def on_finished(self):
         """Called when worker thread finishes"""
@@ -936,7 +1100,7 @@ class ExcelParserGUI(QMainWindow):
         self.refresh_button.setEnabled(True)
         
         self.status_label.setText("Analysis complete")
-        self.output_text.append("\nAnalysis complete. You can start a new analysis or terminate the program.")
+    
     
     def clear_output(self):
         """Clear the output display and table"""
@@ -946,7 +1110,19 @@ class ExcelParserGUI(QMainWindow):
         self.strikethrough_rows.clear()
         self.task_ids = None
         self.copy_button.setEnabled(False)
+        self._edit_history.clear()
+        self._pre_edit_text.clear()
+        self._update_undo_redo_buttons()
         self.status_label.setText("Output cleared")
+
+    def _toggle_log(self, checked: bool):
+        """Show or hide the raw activity log pane."""
+        if checked:
+            self.output_text.show()
+            self.log_toggle_button.setText("Hide Log")
+        else:
+            self.output_text.hide()
+            self.log_toggle_button.setText("Show Log")
 
     def open_templates_dialog(self):
         """Show the templates CRUD dialog and reload the registry on close."""
@@ -1172,8 +1348,8 @@ class ExcelParserGUI(QMainWindow):
         self.output_text.append("Checking for updates and installing if available...\n")
         self.output_text.append("=" * 60 + "\n")
 
-        self.update_button.setEnabled(False)
-        self.update_button.setText("Updating...")
+        self.update_action.setEnabled(False)
+        self.update_action.setText("Updating...")
 
         self.update_process = QProcess(self)
         self.update_process.readyReadStandardOutput.connect(self.handle_update_output)
@@ -1184,13 +1360,13 @@ class ExcelParserGUI(QMainWindow):
         if update_command is None:
             self.output_text.append("Updater is not available in this installation.\n")
             self.status_label.setText("Updater unavailable")
-            self.update_button.setEnabled(True)
-            self.update_button.setText("Check & Install Updates")
+            self.update_action.setEnabled(True)
+            self.update_action.setText("Check && Install Updates")
             self.update_process = None
             return
 
         update_args = update_command[1:] + ["--yes"]
-        if self.prerelease_checkbox.isChecked() and self._update_command_supports_prereleases(update_command):
+        if self.prerelease_action.isChecked() and self._update_command_supports_prereleases(update_command):
             update_args.append("--include-prereleases")
         self.update_process.start(update_command[0], update_args)
 
@@ -1263,8 +1439,8 @@ class ExcelParserGUI(QMainWindow):
                 self.output_text.append("Update process ended unexpectedly.\n")
             self.status_label.setText("Update failed")
 
-        self.update_button.setEnabled(True)
-        self.update_button.setText("Check & Install Updates")
+        self.update_action.setEnabled(True)
+        self.update_action.setText("Check && Install Updates")
         self.update_process = None
     
     def terminate_program(self):
@@ -1309,6 +1485,11 @@ def main():
     app = QApplication(sys.argv)
     gui = ExcelParserGUI()
     gui.show()
+    # Centre on the primary screen after the window frame is established.
+    screen_geo = QApplication.primaryScreen().availableGeometry()
+    fg = gui.frameGeometry()
+    fg.moveCenter(screen_geo.center())
+    gui.move(fg.topLeft())
     sys.exit(app.exec())
 
 
