@@ -28,7 +28,29 @@ $ErrorActionPreference = "Stop"
 $AppName = "DocuReader"
 $InstallDir = Join-Path $env:LOCALAPPDATA "Programs\$AppName"
 $LegacyInstallDir = Join-Path $env:ProgramFiles $AppName
-$SourceDir = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "freeze_build\cx_freeze"
+$SourceDir = $null
+$ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+# When running from an extracted portable ZIP the executable folder sits
+# next to this script as "DocuReader\".  Fall back to the dev/source-checkout
+# path for local builds.
+$candidates = @(
+    (Join-Path $ScriptRoot "DocuReader"),
+    (Join-Path $ScriptRoot "freeze_build\DocuReader"),
+    (Join-Path $ScriptRoot "freeze_build\cx_freeze")
+)
+foreach ($candidate in $candidates) {
+    if (Test-Path (Join-Path $candidate "DocuReader.exe")) {
+        $SourceDir = $candidate
+        break
+    }
+}
+if (-not $SourceDir) {
+    Write-Host "Error: Could not find DocuReader.exe in any expected location." -ForegroundColor Red
+    Write-Host "Searched:" -ForegroundColor Red
+    $candidates | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+    exit 1
+}
 
 Write-Host "=== DocuReader Installer ===" -ForegroundColor Cyan
 Write-Host "Installing to: $InstallDir" -ForegroundColor Yellow

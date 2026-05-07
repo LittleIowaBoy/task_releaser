@@ -148,11 +148,21 @@ if zip_path.exists():
 
 # Create new ZIP
 with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+    # Frozen executable and all its dependencies.
     for root, dirs, files in os.walk(build_output_dir):
         for file in files:
             file_path = Path(root) / file
-            arcname = Path("cx_freeze") / file_path.relative_to(build_output_dir)
+            arcname = Path("DocuReader") / file_path.relative_to(build_output_dir)
             zf.write(file_path, arcname)
+
+    # Installer scripts — placed at the root of the ZIP so the user can
+    # run them directly after extracting.
+    for installer in ["install-docureader.bat", "install-docureader.ps1"]:
+        installer_path = BASE_DIR / installer
+        if installer_path.exists():
+            zf.write(installer_path, installer)
+        else:
+            print(f"  WARNING: {installer} not found; skipping")
             
 # Get file size
 size_mb = zip_path.stat().st_size / (1024 * 1024)
