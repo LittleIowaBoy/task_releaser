@@ -542,8 +542,11 @@ class ExcelParserGUI(QMainWindow):
         # Status banner — centered at the top, shows user-relevant activity messages.
         self.status_label = QLabel("Ready")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        _app_palette = QApplication.instance().palette()
+        _is_dark = _app_palette.color(_app_palette.ColorRole.Window).lightness() < 128
+        _status_color = "#ffffff" if _is_dark else "#000000"
         self.status_label.setStyleSheet(
-            "QLabel { font-style: italic; font-weight: bold; color: #444; padding: 3px 0; }"
+            f"QLabel {{ font-style: italic; font-weight: bold; color: {_status_color}; padding: 3px 0; }}"
         )
         main_layout.addWidget(self.status_label)
         
@@ -696,6 +699,9 @@ class ExcelParserGUI(QMainWindow):
 
     def add_extra_files(self):
         """Open a file browser and append chosen files to the extra-files list."""
+        # Refresh the primary file combo first so any newly-downloaded files
+        # are already indexed before the user picks additional files.
+        self.populate_downloads_files()
         downloads = str(Path.home() / "Downloads")
         files, _ = QFileDialog.getOpenFileNames(
             self,

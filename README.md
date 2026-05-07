@@ -1,6 +1,6 @@
 # DocuReader
 
-**Version: 0.5.0**
+**Version: 0.5.1**
 
 Inventory DocuReader is a PyQt6 GUI and Excel/CSV parser for inventory analysis
 and replenishment workflows.
@@ -192,6 +192,15 @@ GitHub Release. Existing installs pick the new release up automatically the
 next time a user clicks **Check & Install Updates**.
 
 ## Changelog
+
+### 0.5.1
+- **Dark-mode status text**: the status banner at the top of the window now
+  detects the active color theme at startup and uses white text on dark themes,
+  black text on light themes — instead of a hard-coded gray.
+- **Auto-refresh on Add files**: clicking **Add files...** now silently
+  refreshes the primary file list before the browser dialog opens, so
+  newly-downloaded files are always indexed and the table is constructed
+  from up-to-date file paths.
 
 ### 0.5.0
 - **Tools menu**: moved *Check & Install Updates*, *Include Pre-Releases*,
