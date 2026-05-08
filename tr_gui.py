@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QFileDialog, QInputDialog
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QProcess, QSettings
-from PyQt6.QtGui import QFont, QTextDocument, QTextCursor, QColor, QAction
+from PyQt6.QtGui import QFont, QTextDocument, QTextCursor, QColor, QAction, QIcon
 from tr import ExcelParser
 from _version import __version__
 from templates import (
@@ -479,6 +479,13 @@ class ExcelParserGUI(QMainWindow):
     def init_ui(self):
         """Initialize the user interface"""
         self.setWindowTitle("Lomar Inventory Control - DocuReader")
+        _icon_path = (
+            Path(sys.executable).parent / "docureader.ico"
+            if getattr(sys, "frozen", False)
+            else Path(__file__).parent / "docureader.ico"
+        )
+        if _icon_path.exists():
+            self.setWindowIcon(QIcon(str(_icon_path)))
         screen = QApplication.primaryScreen().availableGeometry()
         w = int(screen.width() * 0.58)
         h = int(screen.height() * 0.88)
@@ -526,6 +533,7 @@ class ExcelParserGUI(QMainWindow):
 
         # Create central widget
         central_widget = QWidget()
+        central_widget.setObjectName("central_widget")
         self.setCentralWidget(central_widget)
         
         # Create main layout
@@ -537,6 +545,7 @@ class ExcelParserGUI(QMainWindow):
         title_font.setPointSize(14)
         title_font.setBold(True)
         title.setFont(title_font)
+        self.title_label = title
         main_layout.addWidget(title)
         
         # Status banner — centered at the top, shows user-relevant activity messages.
@@ -609,10 +618,12 @@ class ExcelParserGUI(QMainWindow):
         button_layout = QHBoxLayout()
         
         self.start_button = QPushButton("Analyze and Parse")
+        self.start_button.setProperty("role", "primary")
         self.start_button.clicked.connect(self.start_analysis)
         button_layout.addWidget(self.start_button)
 
         self.copy_button = QPushButton("Copy Task IDs to Clipboard")
+        self.copy_button.setProperty("role", "primary")
         self.copy_button.clicked.connect(self.copy_to_clipboard)
         self.copy_button.setEnabled(False)
         button_layout.addWidget(self.copy_button)
@@ -671,7 +682,73 @@ class ExcelParserGUI(QMainWindow):
         
         # Set layout
         central_widget.setLayout(main_layout)
-    
+        self._apply_theme()
+
+    def _apply_theme(self) -> None:
+        """Apply the Cool Teal color scheme, adapting to the system light/dark theme."""
+        _palette = QApplication.instance().palette()
+        is_dark = _palette.color(_palette.ColorRole.Window).lightness() < 128
+
+        if is_dark:
+            qss = """
+                QWidget#central_widget { background-color: #1A2A2E; }
+                QPushButton {
+                    background-color: #2E7D32; color: white;
+                    border: none; padding: 5px 12px; border-radius: 4px;
+                }
+                QPushButton:hover { background-color: #1B5E20; }
+                QPushButton:pressed { background-color: #0A3D0A; }
+                QPushButton:disabled { background-color: #1A2E1E; color: #4A7A4E; }
+                QPushButton:checked { background-color: #1B5E20; border: 2px solid #A5D6A7; }
+                QPushButton[role="primary"] { background-color: #006978; }
+                QPushButton[role="primary"]:hover { background-color: #004D5C; }
+                QPushButton[role="primary"]:pressed { background-color: #003040; }
+                QPushButton[role="primary"]:disabled { background-color: #0A2A30; color: #1A5A65; }
+                QHeaderView::section {
+                    background-color: #006978; color: white;
+                    padding: 4px; border: 1px solid #004D5C;
+                }
+                QMenuBar::item:selected { background-color: #006978; color: white; }
+                QMenu::item:selected { background-color: #2E7D32; color: white; }
+            """
+            title_color = "#80CBC4"
+            label_color = "#A5D6A7"
+            status_color = "#ffffff"
+        else:
+            qss = """
+                QWidget#central_widget { background-color: #C8E6EA; }
+                QTableWidget, QTextEdit { background-color: #ffffff; }
+                QPushButton {
+                    background-color: #4CAF70; color: white;
+                    border: none; padding: 5px 12px; border-radius: 4px;
+                }
+                QPushButton:hover { background-color: #388E55; }
+                QPushButton:pressed { background-color: #2E7D45; }
+                QPushButton:disabled { background-color: #C8E6D0; color: #9E9E9E; }
+                QPushButton:checked { background-color: #2E7D45; border: 2px solid #1B5E35; }
+                QPushButton[role="primary"] { background-color: #1A97A4; }
+                QPushButton[role="primary"]:hover { background-color: #147D88; }
+                QPushButton[role="primary"]:pressed { background-color: #0D636D; }
+                QPushButton[role="primary"]:disabled { background-color: #B2EBF2; color: #9E9E9E; }
+                QHeaderView::section {
+                    background-color: #1A97A4; color: white;
+                    padding: 4px; border: 1px solid #147D88;
+                }
+                QMenuBar::item:selected { background-color: #1A97A4; color: white; }
+                QMenu::item:selected { background-color: #4CAF70; color: white; }
+            """
+            title_color = "#00695C"
+            label_color = "#00695C"
+            status_color = "#000000"
+
+        QApplication.instance().setStyleSheet(qss)
+        self.title_label.setStyleSheet(f"QLabel {{ color: {title_color}; }}")
+        self.status_label.setStyleSheet(
+            f"QLabel {{ font-style: italic; font-weight: bold; color: {status_color}; padding: 3px 0; }}"
+        )
+        self.detected_label.setStyleSheet(f"QLabel {{ color: {label_color}; font-style: italic; }}")
+        self.extra_files_label.setStyleSheet(f"QLabel {{ color: {label_color}; font-style: italic; }}")
+
     def populate_downloads_files(self):
         """Populate the file combo box with CSV and Excel files from Downloads"""
         self.file_combo.clear()
@@ -1434,8 +1511,26 @@ class ExcelParserGUI(QMainWindow):
         """Handle update process completion"""
         self.output_text.append("\n" + "=" * 60 + "\n")
         if exit_code == 0:
-            self.output_text.append("Update process completed.\n")
-            self.status_label.setText("Update check complete")
+            self.output_text.append(
+                "Update downloaded and staged.\n"
+                "The application must close now so the new files can be installed.\n"
+            )
+            self.status_label.setText("Update ready — closing to apply...")
+            self.update_action.setEnabled(True)
+            self.update_action.setText("Check && Install Updates")
+            self.update_process = None
+            # The swap script (_apply_update.cmd) is waiting for DocuReader.exe
+            # to exit before running robocopy.  Close the app so it can proceed.
+            reply = QMessageBox.information(
+                self,
+                "Update Ready",
+                "The update has been downloaded.\n\n"
+                "The application will now close to finish installing the update.\n"
+                "It will relaunch automatically when the installation is complete.",
+                QMessageBox.StandardButton.Ok,
+            )
+            self.close()
+            return
         elif exit_code == 2:
             self.output_text.append("Already on the latest version.\n")
             self.status_label.setText("No updates available")
