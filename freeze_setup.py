@@ -37,7 +37,7 @@ build_exe_options = {
     ],
     "include_files": [
         (str(BASE_DIR / "default_templates.json"), "default_templates.json"),
-        (str(BASE_DIR / "docureader.ico"), "docureader.ico"),
+        (str(BASE_DIR / "DocuReader.ico"), "DocuReader.ico"),
     ],
     "excludes": ["tkinter", "unittest", "test", "build", "dist", "freeze_build"],
     "include_msvcr": False,
@@ -105,7 +105,7 @@ executables = [
         target_name="DocuReader.exe",
         shortcut_name="DocuReader",
         shortcut_dir="ProgramMenuFolder",
-        icon="docureader.ico",
+        icon="DocuReader.ico",
     ),
     Executable(
         script="update.py",

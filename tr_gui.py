@@ -480,9 +480,9 @@ class ExcelParserGUI(QMainWindow):
         """Initialize the user interface"""
         self.setWindowTitle("Lomar Inventory Control - DocuReader")
         _icon_path = (
-            Path(sys.executable).parent / "docureader.ico"
+            Path(sys.executable).parent / "DocuReader.ico"
             if getattr(sys, "frozen", False)
-            else Path(__file__).parent / "docureader.ico"
+            else Path(__file__).parent / "DocuReader.ico"
         )
         if _icon_path.exists():
             self.setWindowIcon(QIcon(str(_icon_path)))
