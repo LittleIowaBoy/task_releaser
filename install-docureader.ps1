@@ -48,7 +48,7 @@ foreach ($candidate in $candidates) {
 }
 if (-not $SourceDir) {
     Write-Host ""
-    Write-Host "ERROR: DocuReader.exe was not found — the installer cannot continue." -ForegroundColor Red
+    Write-Host "ERROR: DocuReader.exe was not found. The installer cannot continue." -ForegroundColor Red
     Write-Host ""
     Write-Host "This usually means you downloaded the wrong file from GitHub." -ForegroundColor Yellow
     Write-Host "You need the portable ZIP, not the 'Source code' archive." -ForegroundColor Yellow
@@ -134,7 +134,7 @@ try {
 
         $UninstallShortcut = $Shell.CreateShortcut("$StartMenuDir\Uninstall.lnk")
         $UninstallShortcut.TargetPath = "powershell.exe"
-        $UninstallShortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -Command ""& {Remove-Item -Recurse -Force '$InstallDir'; Remove-Item -Recurse -Force '$StartMenuDir';}"""
+        $UninstallShortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -Command `"Remove-Item -Recurse -Force '$InstallDir'; Remove-Item -Recurse -Force '$StartMenuDir'`""
         $UninstallShortcut.IconLocation = "systemroot\System32\shell32.dll,131"
         $UninstallShortcut.Save()
 

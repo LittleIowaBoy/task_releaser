@@ -1,6 +1,6 @@
 # DocuReader
 
-**Version: 0.5.5**
+**Version: 0.5.6**
 
 Inventory DocuReader is a PyQt6 GUI and Excel/CSV parser for inventory analysis
 and replenishment workflows.
