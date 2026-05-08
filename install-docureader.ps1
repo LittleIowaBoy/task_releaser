@@ -47,9 +47,22 @@ foreach ($candidate in $candidates) {
     }
 }
 if (-not $SourceDir) {
-    Write-Host "Error: Could not find DocuReader.exe in any expected location." -ForegroundColor Red
-    Write-Host "Searched:" -ForegroundColor Red
-    $candidates | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+    Write-Host ""
+    Write-Host "ERROR: DocuReader.exe was not found — the installer cannot continue." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "This usually means you downloaded the wrong file from GitHub." -ForegroundColor Yellow
+    Write-Host "You need the portable ZIP, not the 'Source code' archive." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  Correct file:  DocuReader-<version>-portable.zip" -ForegroundColor Cyan
+    Write-Host "  Wrong files:   Source code (zip)  /  Source code (tar.gz)" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "How to get the right file:" -ForegroundColor Yellow
+    Write-Host "  1. Go to https://github.com/LittleIowaBoy/task_releaser/releases/latest" -ForegroundColor White
+    Write-Host "  2. Under 'Assets', click  DocuReader-<version>-portable.zip" -ForegroundColor White
+    Write-Host "  3. Extract that ZIP, then re-run this installer from inside the extracted folder." -ForegroundColor White
+    Write-Host ""
+    Write-Host "Searched these locations (none contained DocuReader.exe):" -ForegroundColor DarkGray
+    $candidates | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
     exit 1
 }
 

@@ -33,7 +33,16 @@ from typing import Any, Iterable, List, Optional, Tuple
 
 USER_CONFIG_DIR = Path.home() / ".docureader"
 USER_TEMPLATES_PATH = USER_CONFIG_DIR / "templates.json"
-DEFAULT_TEMPLATES_PATH = Path(__file__).resolve().parent / "default_templates.json"
+
+# cx_Freeze places data files next to the executable, not next to the module
+# file (which lives inside lib/).  Use sys.executable's parent when frozen.
+import sys as _sys
+if getattr(_sys, "frozen", False):
+    _APP_DIR = Path(_sys.executable).resolve().parent
+else:
+    _APP_DIR = Path(__file__).resolve().parent
+DEFAULT_TEMPLATES_PATH = _APP_DIR / "default_templates.json"
+del _sys, _APP_DIR
 
 
 # ---------------------------------------------------------------------------
