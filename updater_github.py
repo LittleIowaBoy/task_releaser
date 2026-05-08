@@ -100,16 +100,43 @@ class ReleaseInfo:
     checksums_url: Optional[str]
 
 
+def _make_ssl_context() -> ssl.SSLContext:
+    """Build an SSL context that trusts both the default CA bundle and any
+    enterprise root CAs installed in the Windows certificate store.
+
+    In corporate environments, SSL-inspection proxies (Zscaler, Netskope, etc.)
+    re-sign HTTPS traffic with a company root CA.  Python's bundled ``certifi``
+    store doesn't know about that CA, causing ``CERTIFICATE_VERIFY_FAILED``.
+    Loading from the Windows system store (``CA`` and ``ROOT``) picks up those
+    enterprise certs so the updater works on managed machines.
+    """
+    ctx = ssl.create_default_context()
+    if hasattr(ssl, "enum_certificates"):  # Windows only
+        for store_name in ("CA", "ROOT"):
+            try:
+                for cert, encoding, _trust in ssl.enum_certificates(store_name):
+                    if encoding == "x509_asn" and isinstance(cert, bytes):
+                        try:
+                            ctx.load_verify_locations(
+                                cadata=ssl.DER_cert_to_PEM_cert(cert)
+                            )
+                        except ssl.SSLError:
+                            pass
+            except OSError:
+                pass
+    return ctx
+
+
 def _http_json(url: str, timeout: int = 30) -> dict:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"})
-    ctx = ssl.create_default_context()
+    ctx = _make_ssl_context()
     with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
 def _http_download(url: str, dest: Path, timeout: int = 120, progress=None) -> None:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/octet-stream"})
-    ctx = ssl.create_default_context()
+    ctx = _make_ssl_context()
     with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
         total = int(resp.headers.get("Content-Length") or 0)
         downloaded = 0
