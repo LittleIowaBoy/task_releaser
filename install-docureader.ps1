@@ -36,6 +36,7 @@ $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 # path for local builds.
 $candidates = @(
     (Join-Path $ScriptRoot "DocuReader"),
+    (Join-Path $ScriptRoot "cx_freeze"),
     (Join-Path $ScriptRoot "freeze_build\DocuReader"),
     (Join-Path $ScriptRoot "freeze_build\cx_freeze")
 )
@@ -68,18 +69,38 @@ try {
         Write-Host "      The new per-user install will not remove it; delete it manually if desired." -ForegroundColor Yellow
     }
 
-    # Create installation directory
+    # Stop any running DocuReader instance before attempting to replace files.
+    # A running exe is locked on Windows and cannot be deleted or overwritten.
+    $running = Get-Process -Name "DocuReader" -ErrorAction SilentlyContinue
+    if ($running) {
+        Write-Host "Stopping running DocuReader instance(s) before update..." -ForegroundColor Yellow
+        $running | Stop-Process -Force
+        Start-Sleep -Milliseconds 800
+    }
+
+    # Remove the previous per-user installation completely so no stale files remain.
     if (Test-Path $InstallDir) {
         Write-Host "Removing previous per-user installation..." -ForegroundColor Yellow
         Remove-Item -Recurse -Force $InstallDir
+        if (Test-Path $InstallDir) {
+            throw "Could not fully remove previous installation at '$InstallDir'. " +
+                  "Close any programs that may be using it and try again."
+        }
     }
 
     Write-Host "Creating installation directory..." -ForegroundColor Yellow
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 
     # Copy application files
-    Write-Host "Copying application files..." -ForegroundColor Yellow
+    Write-Host "Copying application files from: $SourceDir" -ForegroundColor Yellow
     Copy-Item -Path "$SourceDir\*" -Destination $InstallDir -Recurse -Force
+
+    # Verify the primary executable was actually written.
+    $installedExe = Join-Path $InstallDir "DocuReader.exe"
+    if (-not (Test-Path $installedExe)) {
+        throw "Installation verification failed: DocuReader.exe not found at '$InstallDir'. " +
+              "The source files may be incomplete."
+    }
 
     # Create Start Menu shortcuts
     if (-not $NoStartMenu) {
