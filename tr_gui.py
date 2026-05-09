@@ -8,9 +8,9 @@ from PyQt6.QtWidgets import (
     QPushButton, QTextEdit, QLabel, QComboBox, QMessageBox,
     QTableWidget, QTableWidgetItem, QCheckBox, QDialog, QDialogButtonBox,
     QListWidget, QListWidgetItem, QLineEdit, QFormLayout, QPlainTextEdit,
-    QFileDialog, QInputDialog
+    QFileDialog, QInputDialog, QProgressBar
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QProcess, QSettings
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSettings
 from PyQt6.QtGui import QFont, QTextDocument, QTextCursor, QColor, QAction, QIcon
 from tr import ExcelParser
 from _version import __version__
@@ -298,6 +298,135 @@ class TemplatesDialog(QDialog):
             QMessageBox.critical(self, "Export failed", str(e))
 
 
+# ---------------------------------------------------------------------------
+# Update helpers — download thread + progress dialog
+# ---------------------------------------------------------------------------
+
+class _UpdateThread(QThread):
+    """Downloads and stages a DocuReader release without blocking the GUI.
+
+    Signals
+    -------
+    progress(downloaded, total)
+        Emitted during the download with cumulative byte counts.
+    status(message)
+        Human-readable status string suitable for display in the dialog.
+    staged(staged_dir, install_dir)
+        Emitted once the release has been downloaded, verified, and extracted.
+        Both values are :class:`pathlib.Path` objects.
+    error(message)
+        Emitted on any failure (network, checksum, cancellation-free error).
+    """
+
+    progress = pyqtSignal(int, int)
+    status = pyqtSignal(str)
+    staged = pyqtSignal(object, object)
+    error = pyqtSignal(str)
+
+    def __init__(self, include_prereleases: bool = False) -> None:
+        super().__init__()
+        self.include_prereleases = include_prereleases
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        """Signal the thread to stop at the next progress callback."""
+        self._cancelled = True
+
+    def run(self) -> None:
+        import updater_github
+
+        try:
+            self.status.emit("Checking for latest release…")
+            release = updater_github.fetch_release(self.include_prereleases)
+            if release is None:
+                self.error.emit(
+                    "Could not reach GitHub Releases.\n"
+                    "Check your internet connection and try again."
+                )
+                return
+
+            if not updater_github.is_newer(release.tag, updater_github.CURRENT_VERSION):
+                self.error.emit(
+                    f"Already on the latest version ({updater_github.CURRENT_VERSION})."
+                )
+                return
+
+            self.status.emit(f"Downloading {release.tag}…")
+
+            def _on_progress(downloaded: int, total: int) -> None:
+                if self._cancelled:
+                    raise RuntimeError("Update cancelled by user.")
+                self.progress.emit(downloaded, total)
+
+            staged = updater_github.stage_release(release, progress=_on_progress)
+            if staged is None:
+                if not self._cancelled:
+                    self.error.emit(
+                        "Download failed or checksum mismatch.\n"
+                        "The update was not applied."
+                    )
+                return
+
+            install_dir = updater_github.install_dir_for_running_exe()
+            self.staged.emit(staged, install_dir)
+
+        except Exception as e:
+            if not self._cancelled:
+                self.error.emit(str(e))
+
+
+class _UpdateProgressDialog(QDialog):
+    """Modal progress dialog shown while a release is being downloaded."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Downloading Update")
+        self.setModal(True)
+        self.setMinimumWidth(440)
+        # Disable the X close button so the user must use Cancel.
+        self.setWindowFlags(
+            self.windowFlags()
+            & ~Qt.WindowType.WindowContextHelpButtonHint
+            & ~Qt.WindowType.WindowCloseButtonHint
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        self.status_label = QLabel("Initializing…")
+        layout.addWidget(self.status_label)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        layout.addWidget(self.progress_bar)
+
+        self.detail_label = QLabel("")
+        self.detail_label.setStyleSheet("QLabel { color: #666; font-size: 9pt; }")
+        layout.addWidget(self.detail_label)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.reject)
+        btn_row.addWidget(self.cancel_button)
+        layout.addLayout(btn_row)
+
+    def set_status(self, text: str) -> None:
+        self.status_label.setText(text)
+
+    def set_progress(self, downloaded: int, total: int) -> None:
+        if total > 0:
+            pct = int(downloaded * 100 / total)
+            self.progress_bar.setValue(pct)
+            mb_down = downloaded / (1024 * 1024)
+            mb_total = total / (1024 * 1024)
+            self.detail_label.setText(f"{mb_down:.1f} MB / {mb_total:.1f} MB")
+        else:
+            self.progress_bar.setRange(0, 0)  # indeterminate spinner
+
+
 class WorkerThread(QThread):
     """Worker thread to run the parser without blocking the GUI"""
     finished = pyqtSignal()
@@ -466,7 +595,7 @@ class ExcelParserGUI(QMainWindow):
         self.table_row_location_values = None  # Map table row index to location value
         self.location_col = None  # Track location column for table grouping
         self.bulk_checkbox_update = False  # Prevent recursive checkbox handling
-        self.update_process = None
+        self._update_thread: Optional[_UpdateThread] = None
         self.registry = TemplateRegistry.load()
         self.settings = QSettings("DocuReader", "DocuReader")
         # Track previous version for the "Version Info" dialog.
@@ -1438,138 +1567,90 @@ class ExcelParserGUI(QMainWindow):
             self.output_text.append(f"\nCopied to clipboard: {clipboard_text}\n")
 
     def check_for_updates(self):
-        """Check for and automatically install application updates."""
+        """Download and stage application updates, showing a live progress dialog."""
         reply = QMessageBox.question(
             self,
             "Update Application",
-            "This will run the updater and may reset local files to a release version.\n\n"
-            "Any uncommitted local changes can be lost.\n\n"
-            "The application will need to be restarted after updating.\n\n"
+            "This will check GitHub for a newer release and download it if available.\n\n"
+            "The application will close and relaunch automatically after the update is applied.\n\n"
             "Do you want to continue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
+            QMessageBox.StandardButton.No,
         )
-
         if reply != QMessageBox.StandardButton.Yes:
             return
 
         self.output_text.append("\n" + "=" * 60 + "\n")
-        self.output_text.append("Checking for updates and installing if available...\n")
-        self.output_text.append("=" * 60 + "\n")
-
+        self.output_text.append("Checking for updates…\n")
         self.update_action.setEnabled(False)
-        self.update_action.setText("Updating...")
+        self.update_action.setText("Updating…")
 
-        self.update_process = QProcess(self)
-        self.update_process.readyReadStandardOutput.connect(self.handle_update_output)
-        self.update_process.readyReadStandardError.connect(self.handle_update_error)
-        self.update_process.finished.connect(self.update_finished)
+        thread = _UpdateThread(include_prereleases=self.prerelease_action.isChecked())
+        dialog = _UpdateProgressDialog(self)
+        self._update_thread = thread
 
-        update_command = self.resolve_update_command()
-        if update_command is None:
-            self.output_text.append("Updater is not available in this installation.\n")
-            self.status_label.setText("Updater unavailable")
-            self.update_action.setEnabled(True)
-            self.update_action.setText("Check && Install Updates")
-            self.update_process = None
-            return
+        # Closures capture _result so the main flow can read them after exec().
+        _result: dict = {}
 
-        update_args = update_command[1:] + ["--yes"]
-        if self.prerelease_action.isChecked() and self._update_command_supports_prereleases(update_command):
-            update_args.append("--include-prereleases")
-        self.update_process.start(update_command[0], update_args)
+        def on_staged(staged_dir, install_dir):
+            _result["staged_dir"] = staged_dir
+            _result["install_dir"] = install_dir
+            dialog.accept()
 
-    @staticmethod
-    def _update_command_supports_prereleases(update_command: list) -> bool:
-        """The ``--include-prereleases`` flag is only known to the GitHub
-        Releases updater, not the legacy git-based ``update.py``/``update.exe``."""
-        joined = " ".join(update_command).lower()
-        return "update_github" in joined or "updater_github" in joined
+        def on_error(msg: str):
+            _result["error"] = msg
+            dialog.reject()
 
-    def resolve_update_command(self) -> Optional[list]:
-        """Resolve updater command.
+        thread.progress.connect(dialog.set_progress)
+        thread.status.connect(dialog.set_status)
+        thread.staged.connect(on_staged)
+        thread.error.connect(on_error)
 
-        Selection order (matches the plan, Phase 3.4):
-        1. Frozen exe with ``update_github.exe`` next to it -> the new GitHub
-           Releases updater (works with no Python / no git on the client).
-        2. Frozen exe with ``update.exe`` next to it -> legacy git-based path
-           (developer/test installs only).
-        3. Source checkout with a ``.git`` folder -> ``update.py`` (git-based).
-        4. Source checkout without ``.git`` -> ``updater_github.py`` (network).
-        """
-        frozen = getattr(sys, "frozen", False)
-        if frozen:
-            exe_dir = Path(sys.executable).resolve().parent
-            github = exe_dir / "update_github.exe"
-            if github.exists():
-                return [str(github)]
-            legacy = exe_dir / "update.exe"
-            if legacy.exists():
-                return [str(legacy)]
-            return None
+        thread.start()
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
 
-        script_dir = Path(__file__).resolve().parent
-        if (script_dir / ".git").exists():
-            update_script = script_dir / "update.py"
-            if update_script.exists():
-                return [sys.executable, str(update_script)]
-        github_script = script_dir / "updater_github.py"
-        if github_script.exists():
-            return [sys.executable, str(github_script)]
-        return [sys.executable, "-m", "updater_github"]
-
-    def handle_update_output(self):
-        """Handle stdout from update process"""
-        if self.update_process:
-            data = self.update_process.readAllStandardOutput()
-            output = bytes(data.data()).decode("utf-8", errors="replace")
-            self.output_text.append(output)
-
-    def handle_update_error(self):
-        """Handle stderr from update process"""
-        if self.update_process:
-            data = self.update_process.readAllStandardError()
-            output = bytes(data.data()).decode("utf-8", errors="replace")
-            if output.strip():
-                self.output_text.append(f"[ERROR] {output}")
-
-    def update_finished(self, exit_code, exit_status):
-        """Handle update process completion"""
-        self.output_text.append("\n" + "=" * 60 + "\n")
-        if exit_code == 0:
-            self.output_text.append(
-                "Update downloaded and staged.\n"
-                "The application must close now so the new files can be installed.\n"
-            )
-            self.status_label.setText("Update ready — closing to apply...")
-            self.update_action.setEnabled(True)
-            self.update_action.setText("Check && Install Updates")
-            self.update_process = None
-            # The swap script (_apply_update.cmd) is waiting for DocuReader.exe
-            # to exit before running robocopy.  Close the app so it can proceed.
-            reply = QMessageBox.information(
-                self,
-                "Update Ready",
-                "The update has been downloaded.\n\n"
-                "The application will now close to finish installing the update.\n"
-                "It will relaunch automatically when the installation is complete.",
-                QMessageBox.StandardButton.Ok,
-            )
-            self.close()
-            return
-        elif exit_code == 2:
-            self.output_text.append("Already on the latest version.\n")
-            self.status_label.setText("No updates available")
-        else:
-            self.output_text.append(f"Update process completed with exit code {exit_code}.\n")
-            if exit_status != QProcess.ExitStatus.NormalExit:
-                self.output_text.append("Update process ended unexpectedly.\n")
-            self.status_label.setText("Update failed")
+        # Regardless of outcome, tell the thread to stop and wait for it.
+        thread.cancel()
+        thread.wait(8000)
+        self._update_thread = None
 
         self.update_action.setEnabled(True)
         self.update_action.setText("Check && Install Updates")
-        self.update_process = None
-    
+
+        if not accepted:
+            err = _result.get("error", "")
+            if err:
+                QMessageBox.warning(self, "Update", err)
+                self.output_text.append(f"[Update] {err}\n")
+            else:
+                self.output_text.append("[Update] Cancelled.\n")
+            self.status_label.setText("Update cancelled")
+            return
+
+        staged_dir = _result.get("staged_dir")
+        install_dir = _result.get("install_dir")
+        if staged_dir is None or install_dir is None:
+            return
+
+        self.output_text.append(f"[Update] Staged at: {staged_dir}\n")
+        self.status_label.setText("Update downloaded — restart to apply")
+
+        restart = QMessageBox.question(
+            self,
+            "Update Ready",
+            "The update has been downloaded and verified.\n\n"
+            "Click Yes to close the application now and apply the update.\n"
+            "DocuReader will relaunch automatically once the installation is complete.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if restart == QMessageBox.StandardButton.Yes:
+            import updater_github
+            updater_github.apply_update(Path(staged_dir), Path(install_dir))
+            self.close()
+        else:
+            self.status_label.setText("Update staged — restart when ready.")
+
     def terminate_program(self):
         """Terminate the application"""
         reply = QMessageBox.question(
@@ -1590,11 +1671,12 @@ class ExcelParserGUI(QMainWindow):
     
     def closeEvent(self, event):
         """Handle window close event"""
-        # Stop worker thread if running
         if self.worker_thread and self.worker_thread.isRunning():
             self.worker_thread.quit()
             self.worker_thread.wait()
-        
+        if self._update_thread and self._update_thread.isRunning():
+            self._update_thread.cancel()
+            self._update_thread.wait(3000)
         event.accept()
 
 

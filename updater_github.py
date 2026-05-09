@@ -30,6 +30,7 @@ import os
 import re
 import shutil
 import ssl
+import subprocess
 import sys
 import tempfile
 import urllib.error
@@ -296,53 +297,82 @@ def stage_release(release: ReleaseInfo, progress=None) -> Optional[Path]:
 # ---------------------------------------------------------------------------
 
 
-_APPLY_CMD_TEMPLATE = r"""@echo off
-setlocal
-set STAGED=%~1
-set INSTALL=%~2
-set EXE=%INSTALL%\DocuReader.exe
+def _build_apply_cmd(staged_dir: Path, install_dir: Path) -> str:
+    """Return the text of a batch script with the update paths embedded.
 
-echo Waiting for DocuReader.exe to exit...
-:waitloop
-tasklist /FI "IMAGENAME eq DocuReader.exe" 2>NUL | find /I "DocuReader.exe" >NUL
-if not errorlevel 1 (
-    timeout /T 1 /NOBREAK >NUL
-    goto waitloop
-)
+    Embedding the paths directly (rather than passing them as %~1 / %~2
+    arguments) avoids the quoting ambiguities that caused the previous
+    ``os.system('start "" cmd /c ...')`` approach to silently misparse paths.
+    """
+    staged = str(staged_dir)
+    install = str(install_dir)
+    return (
+        "@echo off\n"
+        "setlocal\n"
+        f'set "STAGED={staged}"\n'
+        f'set "INSTALL={install}"\n'
+        'set "EXE=%INSTALL%\\DocuReader.exe"\n'
+        "\n"
+        "echo Waiting for DocuReader.exe to exit...\n"
+        ":waitloop\n"
+        'tasklist /FI "IMAGENAME eq DocuReader.exe" 2>NUL | find /I "DocuReader.exe" >NUL\n'
+        "if not errorlevel 1 (\n"
+        "    timeout /T 1 /NOBREAK >NUL\n"
+        "    goto waitloop\n"
+        ")\n"
+        "\n"
+        "echo Copying staged files...\n"
+        'robocopy "%STAGED%" "%INSTALL%" /MIR /NFL /NDL /NJH /NJS /NP /R:3 /W:2\n'
+        "if errorlevel 8 (\n"
+        "    echo Update failed during file copy. >&2\n"
+        "    pause\n"
+        "    exit /b 1\n"
+        ")\n"
+        "\n"
+        "echo Update applied. Relaunching DocuReader...\n"
+        'start \"\" \"%EXE%\"\n'
+        "endlocal\n"
+        "exit /b 0\n"
+    )
 
-echo Copying staged files...
-robocopy "%STAGED%" "%INSTALL%" /MIR /NFL /NDL /NJH /NJS /NP /R:3 /W:2
-if errorlevel 8 (
-    echo Update failed during file copy. >&2
-    pause
-    exit /b 1
-)
 
-echo Update applied. Relaunching DocuReader...
-start "" "%EXE%"
-endlocal
-exit /b 0
-"""
-
-
-def write_apply_script(staged_dir: Path) -> Path:
-    """Write the swap-and-relaunch script to a temp file and return its path."""
+def write_apply_script(staged_dir: Path, install_dir: Path) -> Path:
+    """Write the swap-and-relaunch script with embedded paths; return its path."""
+    content = _build_apply_cmd(staged_dir, install_dir)
     fd, name = tempfile.mkstemp(prefix="docureader_apply_", suffix=".cmd")
     os.close(fd)
-    Path(name).write_text(_APPLY_CMD_TEMPLATE, encoding="ascii")
+    Path(name).write_text(content, encoding="ascii")
     return Path(name)
 
 
 def apply_update(staged_dir: Path, install_dir: Path) -> int:
-    """Spawn the swap script and exit so the running exe can be replaced."""
+    """Spawn the swap-and-relaunch script as a detached process.
+
+    The script waits for ``DocuReader.exe`` to exit, then uses robocopy to
+    overwrite the install directory with the staged files, and finally
+    relaunches the exe.  Using ``subprocess.Popen`` with
+    ``DETACHED_PROCESS | CREATE_NEW_CONSOLE`` is far more reliable than the
+    previous ``os.system('start "" cmd /c ...')`` approach, which failed
+    silently when any path contained characters that tripped cmd.exe quoting.
+    """
     if os.name != "nt":
-        print("[updater] Auto-apply is only supported on Windows. "
-              f"Manually copy {staged_dir} -> {install_dir}.", file=sys.stderr)
+        print(
+            "[updater] Auto-apply is only supported on Windows. "
+            f"Manually copy {staged_dir} -> {install_dir}.",
+            file=sys.stderr,
+        )
         return 1
-    script = write_apply_script(staged_dir)
+    script = write_apply_script(staged_dir, install_dir)
     print(f"[updater] Spawning swap script: {script}")
-    # ``start`` detaches the cmd window so we can exit immediately.
-    os.system(f'start "" cmd /c "{script}" "{staged_dir}" "{install_dir}"')
+    try:
+        subprocess.Popen(
+            ["cmd.exe", "/c", str(script)],
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_CONSOLE,
+            close_fds=True,
+        )
+    except OSError as e:
+        print(f"[updater] Failed to spawn apply script: {e}", file=sys.stderr)
+        return 1
     return 0
 
 
