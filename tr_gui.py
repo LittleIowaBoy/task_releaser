@@ -469,6 +469,11 @@ class ExcelParserGUI(QMainWindow):
         self.update_process = None
         self.registry = TemplateRegistry.load()
         self.settings = QSettings("DocuReader", "DocuReader")
+        # Track previous version for the "Version Info" dialog.
+        stored = self.settings.value("version/current", "", type=str)
+        if stored and stored != __version__:
+            self.settings.setValue("version/previous", stored)
+        self.settings.setValue("version/current", __version__)
         self.view_df: Optional[pd.DataFrame] = None
         self.view_meta: Optional[ViewMeta] = None
         self._edit_history = _EditHistory()
@@ -524,6 +529,12 @@ class ExcelParserGUI(QMainWindow):
         batch_action = QAction("Batch Export...", self)
         batch_action.triggered.connect(self.batch_export)
         tools_menu.addAction(batch_action)
+
+        tools_menu.addSeparator()
+
+        version_action = QAction("Version Info...", self)
+        version_action.triggered.connect(self.show_version_info)
+        tools_menu.addAction(version_action)
 
         tools_menu.addSeparator()
 
@@ -1213,6 +1224,21 @@ class ExcelParserGUI(QMainWindow):
         dialog.exec()
         # Re-load from disk so any external edits are picked up too.
         self.registry = TemplateRegistry.load()
+
+    def show_version_info(self):
+        """Display the current and previously installed version."""
+        previous = self.settings.value("version/previous", "", type=str)
+        if previous:
+            message = (
+                f"<b>Current version:</b> {__version__}<br><br>"
+                f"<b>Previous version:</b> {previous}"
+            )
+        else:
+            message = (
+                f"<b>Current version:</b> {__version__}<br><br>"
+                "<i>No previous version recorded.</i>"
+            )
+        QMessageBox.information(self, "Version Info", message)
 
     def _pick_sheet(self, filepath: str):
         """Resolve which sheet to read for an Excel file.
