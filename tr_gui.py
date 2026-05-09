@@ -769,7 +769,7 @@ class ExcelParserGUI(QMainWindow):
         button_layout.addWidget(self.copy_button)
         
         self.refresh_button = QPushButton("Refresh Files")
-        self.refresh_button.clicked.connect(self.populate_downloads_files)
+        self.refresh_button.clicked.connect(lambda: (self.clear_extra_files(), self.populate_downloads_files()))
         button_layout.addWidget(self.refresh_button)
         
         self.clear_button = QPushButton("Clear Output")
