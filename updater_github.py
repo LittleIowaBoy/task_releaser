@@ -367,7 +367,7 @@ def apply_update(staged_dir: Path, install_dir: Path) -> int:
     try:
         subprocess.Popen(
             ["cmd.exe", "/c", str(script)],
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_CONSOLE,
+            creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP,
             close_fds=True,
         )
     except OSError as e:

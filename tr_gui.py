@@ -1646,7 +1646,16 @@ class ExcelParserGUI(QMainWindow):
         )
         if restart == QMessageBox.StandardButton.Yes:
             import updater_github
-            updater_github.apply_update(Path(staged_dir), Path(install_dir))
+            rc = updater_github.apply_update(Path(staged_dir), Path(install_dir))
+            if rc != 0:
+                QMessageBox.critical(
+                    self,
+                    "Update Failed",
+                    "Failed to launch the update installer.\n\n"
+                    "Please try again or reinstall manually.",
+                )
+                self.status_label.setText("Update apply failed.")
+                return
             self.close()
         else:
             self.status_label.setText("Update staged — restart when ready.")

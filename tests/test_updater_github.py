@@ -302,7 +302,11 @@ def test_apply_update_uses_detached_process_flag(tmp_path: Path, monkeypatch):
 
     assert kwargs_seen, "Popen was not called"
     flags = kwargs_seen[0].get("creationflags", 0)
-    assert flags & subprocess.DETACHED_PROCESS
+    assert flags & subprocess.CREATE_NEW_CONSOLE
+    assert flags & subprocess.CREATE_NEW_PROCESS_GROUP
+    assert not (flags & subprocess.DETACHED_PROCESS), (
+        "DETACHED_PROCESS and CREATE_NEW_CONSOLE are mutually exclusive Win32 flags"
+    )
 
 
 def test_apply_update_returns_1_on_popen_oserror(tmp_path: Path, monkeypatch):
