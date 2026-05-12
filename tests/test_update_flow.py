@@ -245,7 +245,7 @@ class TestCheckForUpdates:
         # Suppress QSettings side effects and the file-system scan in populate_downloads_files.
         from PyQt6.QtCore import QSettings
         monkeypatch.setattr(
-            "tr_gui.ExcelParserGUI.populate_downloads_files", lambda self: None
+            "tr_gui.AnalysisTab.populate_downloads_files", lambda self: None
         )
         window = ExcelParserGUI()
         yield window
@@ -496,7 +496,7 @@ class TestVersionTracking:
 
         # Use an isolated settings scope so we don't touch the real registry.
         monkeypatch.setattr(
-            "tr_gui.ExcelParserGUI.populate_downloads_files", lambda self: None
+            "tr_gui.AnalysisTab.populate_downloads_files", lambda self: None
         )
 
         settings = QSettings("DocuReaderTest", "DocuReaderTest_version_test")
@@ -518,7 +518,7 @@ class TestVersionTracking:
         import tr_gui
 
         monkeypatch.setattr(
-            "tr_gui.ExcelParserGUI.populate_downloads_files", lambda self: None
+            "tr_gui.AnalysisTab.populate_downloads_files", lambda self: None
         )
 
         settings = QSettings("DocuReaderTest", "DocuReaderTest_version_test2")

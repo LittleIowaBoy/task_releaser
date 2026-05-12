@@ -1,5 +1,4 @@
 import pandas as pd
-import os
 from typing import List, Callable, Dict, Any
 from pathlib import Path
 
@@ -43,23 +42,12 @@ class ExcelParser:
         try:
             if self.filepath.endswith('.csv'):
                 self.df = pd.read_csv(self.filepath)
-                print(f"Successfully loaded CSV file with {len(self.df)} rows and {len(self.df.columns)} columns")
             else:
                 self.df = pd.read_excel(self.filepath, sheet_name=sheet_name)
-                print(f"Successfully loaded sheet '{sheet_name}' with {len(self.df)} rows and {len(self.df.columns)} columns")
-            
-            print(f"Columns: {list(self.df.columns)}")
-            print(f"\nFirst few rows:")
-            print(self.df.head())
             return self.df
         except FileNotFoundError:
-            print(f"Error: File '{self.filepath}' not found")
-            print(f"Current working directory: {os.getcwd()}")
             return None
-        except Exception as e:
-            print(f"Error reading file: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
             return None
     
     def filter_by_condition(self, column: str, condition: Callable[[Any], bool]) -> pd.DataFrame:
@@ -74,19 +62,14 @@ class ExcelParser:
             Filtered DataFrame
         """
         if self.df is None:
-            print("Error: No data loaded. Call read_excel() first.")
             return None
         
         if column not in self.df.columns:
-            print(f"Error: Column '{column}' not found. Available columns: {list(self.df.columns)}")
             return None
         
         try:
-            filtered = self.df[self.df[column].apply(condition)]
-            print(f"Filter returned {len(filtered)} matching rows out of {len(self.df)}")
-            return filtered
-        except Exception as e:
-            print(f"Error applying condition: {e}")
+            return self.df[self.df[column].apply(condition)]
+        except Exception:
             return None
     
     def filter_by_value(self, column: str, value: Any) -> pd.DataFrame:
@@ -163,7 +146,6 @@ class ExcelParser:
             return []
         
         if column not in dataframe.columns:
-            print(f"Error: Column '{column}' not found")
             return []
         
         return dataframe[column].tolist()
@@ -181,75 +163,19 @@ class ExcelParser:
             Dictionary mapping column names to lists of values
         """
         if dataframe is None or dataframe.empty:
-            print("Error: DataFrame is empty or None")
             return {}
-        
-        print(f"DataFrame shape: {dataframe.shape}")
-        print(f"Actual columns in dataframe: {list(dataframe.columns)}")
         
         result = {}
         for column in columns:
-            # Try exact match first
             if column in dataframe.columns:
                 result[column] = dataframe[column].tolist()
-                print(f"Found column '{column}': {len(result[column])} values")
             else:
-                # Try case-insensitive match
                 matching_cols = [col for col in dataframe.columns if col.lower() == column.lower()]
                 if matching_cols:
-                    actual_col = matching_cols[0]
-                    result[column] = dataframe[actual_col].tolist()
-                    print(f"Found column '{column}' (matched as '{actual_col}'): {len(result[column])} values")
-                else:
-                    print(f"Warning: Column '{column}' not found. Available columns: {list(dataframe.columns)}")
+                    result[column] = dataframe[matching_cols[0]].tolist()
         
         return result
-    
-    def display(self, dataframe: pd.DataFrame = None):
-        """
-        Display the data (or filtered results).
-        
-        Args:
-            dataframe: DataFrame to display. If None, displays current data.
-        """
-        if dataframe is None:
-            dataframe = self.df
 
-        if dataframe is None or dataframe.empty:
-            print("No data to display")
-            return
-
-        df = dataframe
-
-        # Prepare string representations for all values
-        cols = list(df.columns)
-        rows = []
-        for _, r in df.iterrows():
-            row = ["" if pd.isna(r[c]) else str(r[c]) for c in cols]
-            rows.append(row)
-
-        # Compute column widths (consider header and values)
-        col_widths = {}
-        for i, c in enumerate(cols):
-            maxw = len(str(c))
-            for row in rows:
-                if len(row[i]) > maxw:
-                    maxw = len(row[i])
-            col_widths[c] = maxw
-
-        # Build header and separator
-        header_parts = [str(c).ljust(col_widths[c]) for c in cols]
-        header = " | ".join(header_parts)
-        sep_parts = ["-" * col_widths[c] for c in cols]
-        separator = "-+-".join(sep_parts)
-
-        # Print header, separator, and rows with aligned columns
-        print(header)
-        print(separator)
-        for row in rows:
-            row_parts = [row[i].ljust(col_widths[cols[i]]) for i in range(len(cols))]
-            print(" | ".join(row_parts))
-    
     def get_column_names(self) -> List[str]:
         """Get list of column names in the loaded data."""
         if self.df is None:
@@ -312,18 +238,13 @@ class ExcelParser:
                 - items_not_met: Dict of items from Task IDs that don't meet condition, with count of affected Task IDs
         """
         if self.df is None or self.df.empty:
-            print("Error: No data loaded")
             return [], {}
 
-        # Validate columns exist
-        missing_cols = []
-        for col in [task_id_col, condition_col1, condition_col2, item_col]:
-            if col not in self.df.columns:
-                missing_cols.append(col)
-        
+        missing_cols = [
+            col for col in [task_id_col, condition_col1, condition_col2, item_col]
+            if col not in self.df.columns
+        ]
         if missing_cols:
-            print(f"Error: Missing columns: {missing_cols}")
-            print(f"Available columns: {list(self.df.columns)}")
             return [], {}
         
         try:
@@ -345,7 +266,6 @@ class ExcelParser:
             elif comparison == "!=":
                 mask = s1 != s2
             else:
-                print(f"Error: Invalid comparison operator '{comparison}'")
                 return [], {}
             
             # Add a temporary column to track which rows meet the condition
@@ -380,19 +300,9 @@ class ExcelParser:
             # Remove temporary column
             self.df.drop('__condition_met__', axis=1, inplace=True)
             
-            matching_rows = self.df[mask]
-            print(f"Found {len(matching_rows)} rows where {condition_col1} {comparison} {condition_col2}")
-            print(f"Extracted {len(valid_task_ids)} unique Task IDs (where ALL instances meet the condition)")
-            print(f"\n--- Items from Task IDs that do NOT meet the condition ---")
-            for item, task_id_count in sorted(items_not_met_dict.items(), key=lambda x: x[1], reverse=True):
-                print(f"  {item}: affects {task_id_count} Task ID(s)")
-            
             return valid_task_ids, items_not_met_dict
         
-        except Exception as e:
-            print(f"Error processing data: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
             return [], {}
 
 

@@ -8,16 +8,17 @@ from PyQt6.QtWidgets import (
     QPushButton, QTextEdit, QLabel, QComboBox, QMessageBox,
     QTableWidget, QTableWidgetItem, QCheckBox, QDialog, QDialogButtonBox,
     QListWidget, QListWidgetItem, QLineEdit, QFormLayout, QPlainTextEdit,
-    QFileDialog, QInputDialog, QProgressBar
+    QFileDialog, QInputDialog, QProgressBar, QHeaderView, QTabWidget
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSettings
-from PyQt6.QtGui import QFont, QTextDocument, QTextCursor, QColor, QAction, QIcon
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSettings, QFileSystemWatcher, QTimer
+from PyQt6.QtGui import QFont, QTextDocument, QTextCursor, QColor, QAction, QIcon, QKeySequence, QShortcut
 from tr import ExcelParser
 from _version import __version__
 from templates import (
     TemplateRegistry,
     Template,
     HighlightRule,
+    PASSTHROUGH_TEMPLATE,
     USER_TEMPLATES_PATH,
 )
 from view import ViewMeta, apply_template, parse_location_parts
@@ -30,7 +31,7 @@ import json as _json
 # Edit history (undo / redo)
 # ---------------------------------------------------------------------------
 
-UNDO_HISTORY_LIMIT = 10  # number of undoable steps to keep in memory
+UNDO_HISTORY_LIMIT = 50  # number of undoable steps to keep in memory
 
 
 class _CheckboxEdit:
@@ -49,6 +50,39 @@ class _CellTextEdit:
     def __init__(self, row: int, col: int, old_text: str, new_text: str):
         self.row = row
         self.col = col
+        self.old_text = old_text
+        self.new_text = new_text
+
+
+class _SortEdit:
+    """Records one column-header sort click for undo/redo."""
+    __slots__ = (
+        "old_df", "old_meta", "old_sort_col", "old_sort_asc", "old_filter",
+        "new_df", "new_meta", "new_sort_col", "new_sort_asc", "new_filter",
+    )
+
+    def __init__(
+        self,
+        old_df, old_meta, old_sort_col: Optional[int], old_sort_asc: bool, old_filter: str,
+        new_df, new_meta, new_sort_col: int, new_sort_asc: bool, new_filter: str,
+    ) -> None:
+        self.old_df = old_df
+        self.old_meta = old_meta
+        self.old_sort_col = old_sort_col
+        self.old_sort_asc = old_sort_asc
+        self.old_filter = old_filter
+        self.new_df = new_df
+        self.new_meta = new_meta
+        self.new_sort_col = new_sort_col
+        self.new_sort_asc = new_sort_asc
+        self.new_filter = new_filter
+
+
+class _FilterEdit:
+    """Records a debounced filter-bar text change for undo/redo."""
+    __slots__ = ("old_text", "new_text")
+
+    def __init__(self, old_text: str, new_text: str) -> None:
         self.old_text = old_text
         self.new_text = new_text
 
@@ -90,14 +124,203 @@ class _EditHistory:
         self._redo.clear()
 
 
-class TemplatesDialog(QDialog):
-    """Minimal CRUD dialog over the user template store.
+# ---------------------------------------------------------------------------
+# Highlight rule builder dialog
+# ---------------------------------------------------------------------------
 
-    Editing happens as raw JSON for the selected template - this keeps the
-    dialog small while still exposing every option in :class:`templates.Template`
-    (drop, rename, order, sort_by, location_columns, highlights, etc.). Wiring
-    up form widgets per field can come later without changing the storage
-    format.
+_OPERATORS = ["==", "!=", ">", ">=", "<", "<="]
+_COLORS = ["darkgreen", "darkyellow", "red", "blue"]
+_COLOR_SWATCHES = {
+    "darkgreen":  "#82C896",
+    "darkyellow": "#E6C85A",
+    "red":        "#DC7878",
+    "blue":       "#8CB4E6",
+}
+
+
+class _RuleRowWidget(QWidget):
+    """One row in the highlight-rule list: when <col> <op> <value>, color <target_cols>."""
+
+    removed = pyqtSignal(object)  # emits self
+
+    def __init__(self, rule: HighlightRule, known_columns: List[str], parent=None):
+        super().__init__(parent)
+        self._known_columns = known_columns
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 2, 0, 2)
+        row.setSpacing(4)
+
+        row.addWidget(QLabel("When"))
+
+        self.left_combo = QComboBox()
+        self.left_combo.setEditable(True)
+        self.left_combo.addItems(known_columns)
+        row.addWidget(self.left_combo, 2)
+
+        self.op_combo = QComboBox()
+        self.op_combo.addItems(_OPERATORS)
+        row.addWidget(self.op_combo)
+
+        self.right_edit = QLineEdit()
+        self.right_edit.setPlaceholderText("value or column name")
+        row.addWidget(self.right_edit, 2)
+
+        row.addWidget(QLabel("→ highlight"))
+
+        self.target_edit = QLineEdit()
+        self.target_edit.setPlaceholderText("col1, col2 …")
+        self.target_edit.setToolTip("Comma-separated column names to colour. Leave blank to colour left-hand column.")
+        row.addWidget(self.target_edit, 2)
+
+        self.color_combo = QComboBox()
+        for c in _COLORS:
+            self.color_combo.addItem(c)
+        row.addWidget(self.color_combo)
+
+        self._swatch = QLabel("  ")
+        self._swatch.setFixedWidth(20)
+        self._swatch.setAutoFillBackground(True)
+        row.addWidget(self._swatch)
+        self.color_combo.currentTextChanged.connect(self._update_swatch)
+
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("rule name")
+        self.name_edit.setFixedWidth(110)
+        row.addWidget(self.name_edit)
+
+        del_btn = QPushButton("✕")
+        del_btn.setFixedSize(22, 22)
+        del_btn.setToolTip("Remove this rule")
+        del_btn.clicked.connect(lambda: self.removed.emit(self))
+        row.addWidget(del_btn)
+
+        self._populate(rule)
+
+    def _update_swatch(self, color_name: str) -> None:
+        hex_col = _COLOR_SWATCHES.get(color_name, "#cccccc")
+        self._swatch.setStyleSheet(f"background-color: {hex_col}; border: 1px solid #888;")
+
+    def _populate(self, rule: HighlightRule) -> None:
+        # Parse "col op value" stored in rule.when
+        when = rule.when.strip()
+        parsed = None
+        for op in sorted(_OPERATORS, key=len, reverse=True):
+            idx = when.find(op)
+            if idx > 0:
+                left = when[:idx].strip()
+                right = when[idx + len(op):].strip()
+                parsed = (left, op, right)
+                break
+        if parsed:
+            left, op, right = parsed
+            self.left_combo.setCurrentText(left)
+            op_idx = self.op_combo.findText(op)
+            if op_idx >= 0:
+                self.op_combo.setCurrentIndex(op_idx)
+            self.right_edit.setText(right)
+        else:
+            self.left_combo.setCurrentText(when)
+
+        self.target_edit.setText(", ".join(rule.target_columns))
+        color_idx = self.color_combo.findText(rule.color)
+        if color_idx >= 0:
+            self.color_combo.setCurrentIndex(color_idx)
+        self._update_swatch(rule.color)
+        self.name_edit.setText(rule.name)
+
+    def to_rule(self) -> HighlightRule:
+        left = self.left_combo.currentText().strip()
+        op = self.op_combo.currentText()
+        right = self.right_edit.text().strip()
+        when = f"{left} {op} {right}" if left else ""
+        targets_raw = [t.strip() for t in self.target_edit.text().split(",") if t.strip()]
+        targets = targets_raw if targets_raw else ([left] if left else [])
+        return HighlightRule(
+            name=self.name_edit.text().strip() or "rule",
+            when=when,
+            target_columns=targets,
+            color=self.color_combo.currentText(),
+        )
+
+
+class HighlightRuleBuilderDialog(QDialog):
+    """Visual editor for a template's highlight rules.
+
+    Presents each :class:`HighlightRule` as a row of widgets so users can
+    add, edit, reorder, and delete rules without touching JSON.
+    """
+
+    def __init__(self, template: Template, known_columns: List[str], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Highlight Rules — {template.name}")
+        self.resize(900, 480)
+        self._known_columns = known_columns
+
+        root = QVBoxLayout(self)
+
+        legend = QLabel(
+            "Each rule colours selected columns when the condition is true.  "
+            "Rules with higher priority (set in JSON) override lower ones on the same cell."
+        )
+        legend.setWordWrap(True)
+        root.addWidget(legend)
+
+        # Scrollable rule rows
+        from PyQt6.QtWidgets import QScrollArea
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._rows_widget = QWidget()
+        self._rows_layout = QVBoxLayout(self._rows_widget)
+        self._rows_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._rows_layout.setSpacing(2)
+        self._scroll.setWidget(self._rows_widget)
+        root.addWidget(self._scroll, 1)
+
+        self._rule_widgets: List[_RuleRowWidget] = []
+        for rule in template.highlights:
+            self._add_row(rule)
+
+        add_btn = QPushButton("+ Add Rule")
+        add_btn.clicked.connect(self._on_add)
+        root.addWidget(add_btn)
+
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        root.addWidget(btn_box)
+
+    def _add_row(self, rule: Optional[HighlightRule] = None) -> None:
+        if rule is None:
+            rule = HighlightRule()
+        w = _RuleRowWidget(rule, self._known_columns, self._rows_widget)
+        w.removed.connect(self._on_remove)
+        self._rows_layout.addWidget(w)
+        self._rule_widgets.append(w)
+
+    def _on_add(self) -> None:
+        self._add_row()
+
+    def _on_remove(self, widget: "_RuleRowWidget") -> None:
+        self._rule_widgets.remove(widget)
+        self._rows_layout.removeWidget(widget)
+        widget.deleteLater()
+
+    def get_rules(self) -> List[HighlightRule]:
+        return [w.to_rule() for w in self._rule_widgets]
+
+
+# ---------------------------------------------------------------------------
+# Templates CRUD dialog
+# ---------------------------------------------------------------------------
+
+class TemplatesDialog(QDialog):
+    """CRUD dialog over the user template store.
+
+    The right panel shows the selected template as editable JSON.  An "Edit
+    Highlight Rules…" button opens :class:`HighlightRuleBuilderDialog` which
+    lets users build rules without writing JSON directly.
     """
 
     def __init__(self, registry: TemplateRegistry, parent=None):
@@ -148,6 +371,17 @@ class TemplatesDialog(QDialog):
         self.error_label.setStyleSheet("QLabel { color: #b00; }")
         right.addWidget(self.error_label)
 
+        rules_row = QHBoxLayout()
+        edit_rules_btn = QPushButton("Edit Highlight Rules...")
+        edit_rules_btn.setToolTip(
+            "Open a visual editor to add, edit, or remove highlight rules "
+            "without writing JSON by hand."
+        )
+        edit_rules_btn.clicked.connect(self._on_edit_rules)
+        rules_row.addWidget(edit_rules_btn)
+        rules_row.addStretch()
+        right.addLayout(rules_row)
+
         button_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save
             | QDialogButtonBox.StandardButton.Close
@@ -188,6 +422,46 @@ class TemplatesDialog(QDialog):
     def _mark_dirty(self):
         self._dirty = True
         self.error_label.setText("Unsaved changes.")
+
+    def _on_edit_rules(self) -> None:
+        """Open the visual highlight-rule builder for the currently selected template."""
+        # Parse whatever is currently in the editor (may have unsaved edits).
+        t = self._parse_editor()
+        if t is None:
+            return  # JSON is invalid; error already shown
+
+        # Collect column names from the template's `order` or `required_columns`
+        # as hints for the dropdowns; the user can still type freeform.
+        known_cols: List[str] = list(
+            dict.fromkeys(
+                (t.order or []) + (t.required_columns or [])
+            )
+        )
+
+        dlg = HighlightRuleBuilderDialog(t, known_cols, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        rules = dlg.get_rules()
+        # Merge updated rules back into the template and refresh the JSON editor.
+        updated = Template(
+            name=t.name,
+            description=t.description,
+            builtin=t.builtin,
+            filename_patterns=t.filename_patterns,
+            required_columns=t.required_columns,
+            drop=t.drop,
+            rename=t.rename,
+            order=t.order,
+            sort_by=t.sort_by,
+            location_columns=t.location_columns,
+            highlights=rules,
+        )
+        self.editor.blockSignals(True)
+        self.editor.setPlainText(_json.dumps(updated.to_dict(), indent=2))
+        self.editor.blockSignals(False)
+        self._dirty = True
+        self.error_label.setText("Highlight rules updated — click Save to persist.")
 
     def _parse_editor(self) -> Optional[Template]:
         try:
@@ -581,138 +855,115 @@ class WorkerThread(QThread):
             self.output.emit(f"Error executing function: {str(e)}\n")
 
 
-class ExcelParserGUI(QMainWindow):
-    """PyQt GUI for the Excel Parser"""
-    
-    def __init__(self):
-        super().__init__()
+# ---------------------------------------------------------------------------
+# Module-level XLSX export helper (shared by AnalysisTab and batch_export)
+# ---------------------------------------------------------------------------
+
+def _export_xlsx_with_highlights(
+    path: str,
+    view_df: pd.DataFrame,
+    view_meta: Optional[ViewMeta],
+) -> None:
+    """Write *view_df* to *path* as an .xlsx file, applying ViewMeta highlights."""
+    from openpyxl import Workbook
+    from openpyxl.styles import PatternFill
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "View"
+    cols = list(view_df.columns)
+    ws.append(cols)
+    for _, row in view_df.iterrows():
+        ws.append(["" if pd.isna(v) else v for v in row.tolist()])
+
+    hex_for = {
+        "darkgreen": "82C896",
+        "darkyellow": "E6C85A",
+        "red": "DC7878",
+        "blue": "8CB4E6",
+    }
+    if view_meta is not None and view_meta.highlights:
+        col_index = {c: i + 1 for i, c in enumerate(cols)}
+        for (data_row, col_name, color_name) in view_meta.highlights:
+            hex_code = hex_for.get(color_name)
+            col_idx = col_index.get(col_name)
+            if not hex_code or col_idx is None:
+                continue
+            ws.cell(row=int(data_row) + 2, column=col_idx).fill = PatternFill(
+                start_color=hex_code, end_color=hex_code, fill_type="solid"
+            )
+    wb.save(path)
+
+
+# ---------------------------------------------------------------------------
+# Per-analysis tab widget
+# ---------------------------------------------------------------------------
+
+class AnalysisTab(QWidget):
+    """A self-contained analysis session displayed as one tab in the main window.
+
+    All per-analysis state (worker thread, data, table, undo history) lives
+    here.  The main window (ExcelParserGUI) owns only app-level concerns:
+    the menu bar, tab widget, theme, updater, and template registry.
+    """
+
+    analysis_complete = pyqtSignal(str)   # emits filename stem for tab title
+    export_state_changed = pyqtSignal(bool)  # True when a view is ready to export
+
+    def __init__(self, registry: TemplateRegistry, settings: QSettings, parent=None):
+        super().__init__(parent)
+        self.setObjectName("central_widget")
+        self.registry = registry
+        self.settings = settings
+        # Per-tab state
         self.worker_thread = None
         self.current_df = None
         self.task_ids = None
-        self.strikethrough_rows = set()  # Track which rows have strikethrough applied
-        self.cell_highlights: Dict[Tuple[int, str], str] = {}  # (data_row, col) -> color
-        self.table_row_map = None  # Map table row index to data row index
-        self.table_row_location_values = None  # Map table row index to location value
-        self.location_col = None  # Track location column for table grouping
-        self.bulk_checkbox_update = False  # Prevent recursive checkbox handling
-        self._update_thread: Optional[_UpdateThread] = None
-        self.registry = TemplateRegistry.load()
-        self.settings = QSettings("DocuReader", "DocuReader")
-        # Track previous version for the "Version Info" dialog.
-        stored = self.settings.value("version/current", "", type=str)
-        if stored and stored != __version__:
-            self.settings.setValue("version/previous", stored)
-        self.settings.setValue("version/current", __version__)
+        self.strikethrough_rows: set = set()
+        self.cell_highlights: Dict[Tuple[int, str], str] = {}
+        self.table_row_map = None
+        self.table_row_location_values = None
+        self.location_col = None
+        self.bulk_checkbox_update = False
         self.view_df: Optional[pd.DataFrame] = None
         self.view_meta: Optional[ViewMeta] = None
         self._edit_history = _EditHistory()
         self._suppressing_history = False
         self._pre_edit_text: Dict[Tuple[int, int], str] = {}
-        self.init_ui()
-    
-    def init_ui(self):
-        """Initialize the user interface"""
-        self.setWindowTitle("Lomar Inventory Control - DocuReader")
-        _icon_path = (
-            Path(sys.executable).parent / "DocuReader.ico"
-            if getattr(sys, "frozen", False)
-            else Path(__file__).parent / "DocuReader.ico"
-        )
-        if _icon_path.exists():
-            self.setWindowIcon(QIcon(str(_icon_path)))
-        screen = QApplication.primaryScreen().availableGeometry()
-        w = int(screen.width() * 0.58)
-        h = int(screen.height() * 0.88)
-        self.resize(w, h)
+        self._sort_column: Optional[int] = None
+        self._sort_ascending: bool = True
+        self._suppress_width_save: bool = False
+        self._filter_pre_text: str = ""
+        self._build_ui()
 
-        # ----- Menu bar -----
-        tools_menu = self.menuBar().addMenu("&Tools")
+    def _build_ui(self) -> None:
+        _palette = QApplication.instance().palette()
+        is_dark = _palette.color(_palette.ColorRole.Window).lightness() < 128
+        label_color = "#A5D6A7" if is_dark else "#00695C"
+        status_color = "#ffffff" if is_dark else "#000000"
 
-        self.update_action = QAction("Check && Install Updates", self)
-        self.update_action.triggered.connect(self.check_for_updates)
-        tools_menu.addAction(self.update_action)
+        main_layout = QVBoxLayout(self)
 
-        self.prerelease_action = QAction("Include Pre-Releases", self)
-        self.prerelease_action.setCheckable(True)
-        self.prerelease_action.setChecked(
-            self.settings.value("updater/include_prereleases", False, type=bool)
-        )
-        self.prerelease_action.toggled.connect(
-            lambda v: self.settings.setValue("updater/include_prereleases", bool(v))
-        )
-        tools_menu.addAction(self.prerelease_action)
-
-        tools_menu.addSeparator()
-
-        templates_action = QAction("Templates...", self)
-        templates_action.triggered.connect(self.open_templates_dialog)
-        tools_menu.addAction(templates_action)
-
-        tools_menu.addSeparator()
-
-        self.export_action = QAction("Export View...", self)
-        self.export_action.triggered.connect(self.export_view)
-        self.export_action.setEnabled(False)
-        tools_menu.addAction(self.export_action)
-
-        batch_action = QAction("Batch Export...", self)
-        batch_action.triggered.connect(self.batch_export)
-        tools_menu.addAction(batch_action)
-
-        tools_menu.addSeparator()
-
-        version_action = QAction("Version Info...", self)
-        version_action.triggered.connect(self.show_version_info)
-        tools_menu.addAction(version_action)
-
-        tools_menu.addSeparator()
-
-        terminate_action = QAction("Terminate", self)
-        terminate_action.triggered.connect(self.terminate_program)
-        tools_menu.addAction(terminate_action)
-
-        # Create central widget
-        central_widget = QWidget()
-        central_widget.setObjectName("central_widget")
-        self.setCentralWidget(central_widget)
-        
-        # Create main layout
-        main_layout = QVBoxLayout()
-        
-        # Title
-        title = QLabel("Inventory DocuReader")
-        title_font = title.font()
-        title_font.setPointSize(14)
-        title_font.setBold(True)
-        title.setFont(title_font)
-        self.title_label = title
-        main_layout.addWidget(title)
-        
-        # Status banner — centered at the top, shows user-relevant activity messages.
+        # Status banner
         self.status_label = QLabel("Ready")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        _app_palette = QApplication.instance().palette()
-        _is_dark = _app_palette.color(_app_palette.ColorRole.Window).lightness() < 128
-        _status_color = "#ffffff" if _is_dark else "#000000"
         self.status_label.setStyleSheet(
-            f"QLabel {{ font-style: italic; font-weight: bold; color: {_status_color}; padding: 3px 0; }}"
+            f"QLabel {{ font-style: italic; font-weight: bold; color: {status_color}; padding: 3px 0; }}"
         )
         main_layout.addWidget(self.status_label)
-        
-        # File selection section
+
+        # File selection
         file_layout = QHBoxLayout()
         file_layout.addWidget(QLabel("Which file do you want?"))
-        
         self.file_combo = QComboBox()
         self.populate_downloads_files()
         file_layout.addWidget(self.file_combo)
-        
         main_layout.addLayout(file_layout)
 
-        # Extra files row — allows multi-document parsing (e.g. east + west tower).
+        # Extra files row
         extra_layout = QHBoxLayout()
         self.extra_files_label = QLabel("Additional files: none")
-        self.extra_files_label.setStyleSheet("QLabel { color: #555; font-style: italic; }")
+        self.extra_files_label.setStyleSheet(f"QLabel {{ color: {label_color}; font-style: italic; }}")
         extra_layout.addWidget(self.extra_files_label)
         self.add_files_button = QPushButton("Add files...")
         self.add_files_button.setToolTip(
@@ -735,28 +986,22 @@ class ExcelParserGUI(QMainWindow):
         self.extra_files_list.hide()
         main_layout.addWidget(self.extra_files_list)
 
-        # Function selection section
+        # Function selection
         function_layout = QHBoxLayout()
         function_layout.addWidget(QLabel("What do you need?"))
-        
         self.function_combo = QComboBox()
         self.function_combo.addItem("Chase Tasks Needing Released", "get_task_ids_where_condition")
-        #self.function_combo.addItem("filter_by_value", "filter_by_value")
-        #self.function_combo.addItem("filter_by_range", "filter_by_range")
-        #self.function_combo.addItem("filter_by_contains", "filter_by_contains")
         self.function_combo.addItem("The Whole Table", "display_all")
-        
         function_layout.addWidget(self.function_combo)
         main_layout.addLayout(function_layout)
 
-        # Detected template / category label (populated after analysis runs).
+        # Detected template label
         self.detected_label = QLabel("Detected category: (none yet - run an analysis)")
-        self.detected_label.setStyleSheet("QLabel { color: #555; font-style: italic; }")
+        self.detected_label.setStyleSheet(f"QLabel {{ color: {label_color}; font-style: italic; }}")
         main_layout.addWidget(self.detected_label)
 
-        # Buttons layout
+        # Buttons
         button_layout = QHBoxLayout()
-        
         self.start_button = QPushButton("Analyze and Parse")
         self.start_button.setProperty("role", "primary")
         self.start_button.clicked.connect(self.start_analysis)
@@ -767,20 +1012,14 @@ class ExcelParserGUI(QMainWindow):
         self.copy_button.clicked.connect(self.copy_to_clipboard)
         self.copy_button.setEnabled(False)
         button_layout.addWidget(self.copy_button)
-        
-        self.refresh_button = QPushButton("Refresh Files")
-        self.refresh_button.clicked.connect(lambda: (self.clear_extra_files(), self.populate_downloads_files()))
-        button_layout.addWidget(self.refresh_button)
-        
+
         self.clear_button = QPushButton("Clear Output")
         self.clear_button.clicked.connect(self.clear_output)
         button_layout.addWidget(self.clear_button)
 
         self.log_toggle_button = QPushButton("Show Log")
         self.log_toggle_button.setCheckable(True)
-        self.log_toggle_button.setToolTip(
-            "Show or hide the raw activity log (technical details)."
-        )
+        self.log_toggle_button.setToolTip("Show or hide the raw activity log (technical details).")
         self.log_toggle_button.toggled.connect(self._toggle_log)
         button_layout.addWidget(self.log_toggle_button)
 
@@ -798,19 +1037,36 @@ class ExcelParserGUI(QMainWindow):
         self.redo_button.setEnabled(False)
         button_layout.addWidget(self.redo_button)
 
-
-        
         main_layout.addLayout(button_layout)
 
-        # Table widget — fills all remaining vertical space.
+        # Filter bar
+        _filter_layout = QHBoxLayout()
+        _filter_layout.setSpacing(6)
+        _filter_layout.addWidget(QLabel("Filter rows:"))
+        self._filter_bar = QLineEdit()
+        self._filter_bar.setPlaceholderText("Type to search all columns...  (Ctrl+F)")
+        self._filter_bar.setClearButtonEnabled(True)
+        self._filter_bar.textChanged.connect(self._on_filter_changed)
+        _filter_layout.addWidget(self._filter_bar)
+        _filter_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
+        _filter_shortcut.activated.connect(self._filter_bar.setFocus)
+        self._filter_commit_timer = QTimer(self)
+        self._filter_commit_timer.setSingleShot(True)
+        self._filter_commit_timer.timeout.connect(self._on_filter_settled)
+        main_layout.addLayout(_filter_layout)
+
+        # Table widget
         self.table_widget = QTableWidget()
         self.table_widget.setColumnCount(0)
         self.table_widget.setRowCount(0)
         self.table_widget.currentItemChanged.connect(self._on_current_item_changed)
         self.table_widget.itemChanged.connect(self._on_cell_text_changed)
-        main_layout.addWidget(self.table_widget, 1)  # stretch=1
+        self.table_widget.horizontalHeader().setSectionsClickable(True)
+        self.table_widget.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
+        self.table_widget.horizontalHeader().sectionResized.connect(self._on_col_width_changed)
+        main_layout.addWidget(self.table_widget, 1)
 
-        # Log pane — hidden by default; revealed via the "Show Log" toggle button.
+        # Log pane
         self.output_text = QTextEdit()
         self.output_text.setReadOnly(True)
         monospace_font = QFont("Courier New", 9)
@@ -819,13 +1075,837 @@ class ExcelParserGUI(QMainWindow):
         self.output_text.setFixedHeight(150)
         self.output_text.hide()
         main_layout.addWidget(self.output_text)
-        
-        # Set layout
-        central_widget.setLayout(main_layout)
+
+    def apply_label_colors(self, label_color: str, status_color: str) -> None:
+        """Update label colours when the main window re-applies the theme."""
+        self.status_label.setStyleSheet(
+            f"QLabel {{ font-style: italic; font-weight: bold; color: {status_color}; padding: 3px 0; }}"
+        )
+        self.detected_label.setStyleSheet(f"QLabel {{ color: {label_color}; font-style: italic; }}")
+        self.extra_files_label.setStyleSheet(f"QLabel {{ color: {label_color}; font-style: italic; }}")
+
+    def populate_downloads_files(self) -> None:
+        """Populate the file combo with CSV/Excel files from ~/Downloads."""
+        self.file_combo.clear()
+        downloads_path = Path.home() / "Downloads"
+        files = []
+        for ext in ["*.csv", "*.xlsx", "*.xls"]:
+            files.extend(downloads_path.glob(ext))
+        if files:
+            files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+            for f in files:
+                self.file_combo.addItem(f.name, str(f))
+            self.status_label.setText(f"Found {len(files)} file(s) in Downloads")
+        else:
+            self.file_combo.addItem("No files found", None)
+            self.status_label.setText("No CSV or Excel files found in Downloads folder")
+
+    # ------------------------------------------------------------------
+    # Multi-file helpers
+    # ------------------------------------------------------------------
+
+    def add_extra_files(self):
+        self.populate_downloads_files()
+        downloads = str(Path.home() / "Downloads")
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Add files to parse", downloads,
+            "Data files (*.csv *.xlsx *.xls);;All files (*)",
+        )
+        existing_paths = {
+            self.extra_files_list.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(self.extra_files_list.count())
+        }
+        for fp in files:
+            if fp in existing_paths:
+                continue
+            item = QListWidgetItem(Path(fp).name)
+            item.setData(Qt.ItemDataRole.UserRole, fp)
+            self.extra_files_list.addItem(item)
+            existing_paths.add(fp)
+        self._refresh_extra_files_ui()
+
+    def remove_extra_file(self):
+        for item in self.extra_files_list.selectedItems():
+            self.extra_files_list.takeItem(self.extra_files_list.row(item))
+        self._refresh_extra_files_ui()
+
+    def clear_extra_files(self):
+        self.extra_files_list.clear()
+        self._refresh_extra_files_ui()
+
+    def _refresh_extra_files_ui(self):
+        count = self.extra_files_list.count()
+        if count == 0:
+            self.extra_files_label.setText("Additional files: none")
+            self.extra_files_list.hide()
+        else:
+            noun = "file" if count == 1 else "files"
+            self.extra_files_label.setText(f"Additional files: {count} {noun} selected")
+            self.extra_files_list.show()
+
+    # ------------------------------------------------------------------
+    # Analysis
+    # ------------------------------------------------------------------
+
+    def start_analysis(self):
+        if self.file_combo.currentData() is None:
+            QMessageBox.warning(self, "No File", "No file selected. Please select a file from Downloads.")
+            return
+
+        primary_filepath = self.file_combo.currentData()
+        extra_filepaths = [
+            self.extra_files_list.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(self.extra_files_list.count())
+        ]
+        all_filepaths = [primary_filepath] + extra_filepaths
+        selected_function = self.function_combo.currentData()
+
+        sheet_names: Dict[str, str] = {}
+        for fp in all_filepaths:
+            sheet = self._pick_sheet(fp)
+            if sheet is False:
+                return
+            if sheet:
+                sheet_names[fp] = sheet
+
+        self.start_button.setEnabled(False)
+        self.file_combo.setEnabled(False)
+        self.function_combo.setEnabled(False)
+
+        self.table_widget.setRowCount(0)
+        self.table_widget.setColumnCount(0)
+        self.strikethrough_rows.clear()
+        self.task_ids = None
+        self.copy_button.setEnabled(False)
+        self._sort_column = None
+        self._sort_ascending = True
+        self.table_widget.horizontalHeader().setSortIndicatorShown(False)
+        self._filter_bar.clear()
+
+        file_count = len(all_filepaths)
+        self.status_label.setText(f"Analyzing {file_count} files..." if file_count > 1 else "Analyzing...")
+
+        self.worker_thread = WorkerThread(
+            all_filepaths, selected_function, self.registry, sheet_names=sheet_names
+        )
+        self.worker_thread.output.connect(self.append_output)
+        self.worker_thread.error.connect(self.on_error)
+        self.worker_thread.table_ready.connect(self.on_table_ready)
+        self.worker_thread.task_ids_ready.connect(self.on_task_ids_ready)
+        self.worker_thread.data_loaded.connect(self.on_data_loaded)
+        self.worker_thread.template_matched.connect(self.on_template_matched)
+        self.worker_thread.finished.connect(self.on_finished)
+        self.worker_thread.start()
+
+    def append_output(self, text: str):
+        self.output_text.append(text)
+
+    def on_template_matched(self, template_name: str, reason: str):
+        self.detected_label.setText(f"Detected category: {template_name}")
+        self.detected_label.setToolTip(f"Matched by: {reason}")
+
+    def _is_dark_theme(self) -> bool:
+        return self.table_widget.palette().color(
+            self.table_widget.palette().ColorRole.Window
+        ).lightness() < 128
+
+    def _default_table_text_color(self) -> QColor:
+        return QColor("white") if self._is_dark_theme() else QColor("black")
+
+    def _is_highlighted_cell(self, data_row_idx: int, col_name: str) -> bool:
+        return (data_row_idx, col_name) in self.cell_highlights
+
+    @staticmethod
+    def _color_for_name(name: str) -> Optional[QColor]:
+        return {
+            "darkgreen": QColor(130, 200, 150),
+            "darkyellow": QColor(230, 200, 90),
+            "red": QColor(220, 120, 120),
+            "blue": QColor(140, 180, 230),
+        }.get(name)
+
+    def _render_table(self, df: pd.DataFrame, meta: ViewMeta) -> None:
+        """Populate the table widget from *df*/*meta* without touching the edit history."""
+        prev = self._suppressing_history
+        self._suppressing_history = True
+        self.view_df = df.copy()
+        self.view_meta = meta
+        self.export_state_changed.emit(True)
+        self.strikethrough_rows.clear()
+        self.cell_highlights = {(int(r), c): color for (r, c, color) in meta.highlights}
+
+        location_col = meta.location_column if meta.location_column in df.columns else None
+        self.location_col = location_col
+
+        render_rows = []
+        self.table_row_map = []
+        self.table_row_location_values = []
+        prev_prefix = None
+        for df_idx, (_, row_data) in enumerate(df.iterrows()):
+            prefix = None
+            location_text = None
+            if location_col:
+                location_value = row_data.get(location_col)
+                location_text = "" if pd.isna(location_value) else str(location_value)
+                parsed_prefix, parsed_number, _ = parse_location_parts(location_text)
+                prefix = (
+                    parsed_prefix,
+                    parsed_number // 100000 if parsed_number != float("inf") else float("inf"),
+                )
+            if location_col and prev_prefix is not None and prefix != prev_prefix:
+                render_rows.append({"type": "divider"})
+                self.table_row_map.append(None)
+                self.table_row_location_values.append(None)
+            render_rows.append({"type": "data", "df_idx": df_idx, "row_data": row_data})
+            self.table_row_map.append(df_idx)
+            self.table_row_location_values.append(location_text if location_col else None)
+            if location_col:
+                prev_prefix = prefix
+
+        self.table_widget.setRowCount(len(render_rows))
+        self.table_widget.setColumnCount(len(df.columns) + 1)
+        self.table_widget.setHorizontalHeaderLabels(list(df.columns) + ["Done?"])
+
+        default_text_color = self._default_table_text_color()
+        for row_idx, render_row in enumerate(render_rows):
+            if render_row["type"] == "divider":
+                for col_idx in range(len(df.columns)):
+                    item = QTableWidgetItem("-----")
+                    item.setFlags(Qt.ItemFlag.NoItemFlags)
+                    item.setForeground(default_text_color)
+                    self.table_widget.setItem(row_idx, col_idx, item)
+                continue
+            row_data = render_row["row_data"]
+            df_idx = render_row["df_idx"]
+            for col_idx, col_name in enumerate(df.columns):
+                value = row_data[col_name]
+                item = QTableWidgetItem("" if pd.isna(value) else str(value))
+                color_name = self.cell_highlights.get((df_idx, col_name))
+                if color_name:
+                    qcolor = self._color_for_name(color_name)
+                    if qcolor is not None:
+                        item.setBackground(qcolor)
+                        item.setForeground(QColor("black"))
+                self.table_widget.setItem(row_idx, col_idx, item)
+            checkbox = QCheckBox()
+            checkbox.stateChanged.connect(lambda checked, r=row_idx: self.on_checkbox_changed(r, checked))
+            self.table_widget.setCellWidget(row_idx, len(df.columns), checkbox)
+
+        self._suppressing_history = prev
+        self._suppress_width_save = True
+        self.table_widget.resizeColumnsToContents()
+        self._restore_column_widths(meta.template_name)
+        self._suppress_width_save = False
+        header = self.table_widget.horizontalHeader()
+        if header is not None:
+            header.setStretchLastSection(True)
+        if self._filter_bar.text().strip():
+            self._on_filter_changed(self._filter_bar.text())
+
+    def on_table_ready(self, df: pd.DataFrame, meta: ViewMeta):
+        if df is None or df.empty:
+            self.output_text.append("No data to display in table.\n")
+            return
+        self._render_table(df, meta)
+        self._edit_history.clear()
+        self._filter_commit_timer.stop()
+        self._filter_pre_text = ""
+        self._update_undo_redo_buttons()
+
+    def on_checkbox_changed(self, row_idx: int, state):
+        if self.bulk_checkbox_update or self._suppressing_history:
+            return
+        is_checked = state == 2
+        data_row_idx = None
+        if isinstance(self.table_row_map, list) and row_idx < len(self.table_row_map):
+            data_row_idx = self.table_row_map[row_idx]
+        if data_row_idx is None:
+            return
+        location_value = None
+        if isinstance(self.table_row_location_values, list) and row_idx < len(self.table_row_location_values):
+            location_value = self.table_row_location_values[row_idx]
+
+        self._suppressing_history = True
+        try:
+            if location_value is None:
+                affected = [(row_idx, not is_checked, is_checked)]
+                self.apply_row_strikethrough(row_idx, is_checked)
+            else:
+                affected = []
+                self.bulk_checkbox_update = True
+                try:
+                    for tidx, row_loc in enumerate(self.table_row_location_values):
+                        if row_loc != location_value:
+                            continue
+                        checkbox = self.table_widget.cellWidget(tidx, self.table_widget.columnCount() - 1)
+                        if isinstance(checkbox, QCheckBox):
+                            old = (not is_checked) if tidx == row_idx else checkbox.isChecked()
+                            affected.append((tidx, old, is_checked))
+                            if checkbox.isChecked() != is_checked:
+                                checkbox.setChecked(is_checked)
+                        self.apply_row_strikethrough(tidx, is_checked)
+                finally:
+                    self.bulk_checkbox_update = False
+        finally:
+            self._suppressing_history = False
+        self._edit_history.push(_CheckboxEdit(affected))
+        self._update_undo_redo_buttons()
+        self._update_status_summary()
+
+    def _on_current_item_changed(self, current, previous):
+        if current is not None and not self._suppressing_history:
+            self._pre_edit_text[(current.row(), current.column())] = current.text()
+
+    def _on_cell_text_changed(self, item):
+        if self._suppressing_history:
+            return
+        key = (item.row(), item.column())
+        old_text = self._pre_edit_text.get(key)
+        if old_text is not None and item.text() != old_text:
+            self._edit_history.push(_CellTextEdit(
+                row=item.row(), col=item.column(),
+                old_text=old_text, new_text=item.text(),
+            ))
+            self._pre_edit_text[key] = item.text()
+            self._update_undo_redo_buttons()
+
+    def _undo_edit(self):
+        edit = self._edit_history.undo()
+        if edit is None:
+            return
+        self._suppressing_history = True
+        self.bulk_checkbox_update = True
+        try:
+            if isinstance(edit, _CheckboxEdit):
+                for tidx, old_checked, _new in edit.affected:
+                    cb = self.table_widget.cellWidget(tidx, self.table_widget.columnCount() - 1)
+                    if isinstance(cb, QCheckBox):
+                        cb.setChecked(old_checked)
+                    self.apply_row_strikethrough(tidx, old_checked)
+            elif isinstance(edit, _CellTextEdit):
+                item = self.table_widget.item(edit.row, edit.col)
+                if item:
+                    item.setText(edit.old_text)
+                    self._pre_edit_text[(edit.row, edit.col)] = edit.old_text
+            elif isinstance(edit, _SortEdit):
+                self._sort_column = edit.old_sort_col
+                self._sort_ascending = edit.old_sort_asc
+                self._filter_bar.setText(edit.old_filter)
+                self._filter_pre_text = edit.old_filter
+                self._filter_commit_timer.stop()
+                self._render_table(edit.old_df, edit.old_meta)
+                header = self.table_widget.horizontalHeader()
+                if edit.old_sort_col is not None:
+                    order = Qt.SortOrder.AscendingOrder if edit.old_sort_asc else Qt.SortOrder.DescendingOrder
+                    header.setSortIndicator(edit.old_sort_col, order)
+                    header.setSortIndicatorShown(True)
+                else:
+                    header.setSortIndicatorShown(False)
+            elif isinstance(edit, _FilterEdit):
+                self._filter_bar.setText(edit.old_text)
+                self._filter_pre_text = edit.old_text
+                self._filter_commit_timer.stop()
+        finally:
+            self._suppressing_history = False
+            self.bulk_checkbox_update = False
+        self._update_undo_redo_buttons()
+        self._update_status_summary()
+
+    def _redo_edit(self):
+        edit = self._edit_history.redo()
+        if edit is None:
+            return
+        self._suppressing_history = True
+        self.bulk_checkbox_update = True
+        try:
+            if isinstance(edit, _CheckboxEdit):
+                for tidx, _old, new_checked in edit.affected:
+                    cb = self.table_widget.cellWidget(tidx, self.table_widget.columnCount() - 1)
+                    if isinstance(cb, QCheckBox):
+                        cb.setChecked(new_checked)
+                    self.apply_row_strikethrough(tidx, new_checked)
+            elif isinstance(edit, _CellTextEdit):
+                item = self.table_widget.item(edit.row, edit.col)
+                if item:
+                    item.setText(edit.new_text)
+                    self._pre_edit_text[(edit.row, edit.col)] = edit.new_text
+            elif isinstance(edit, _SortEdit):
+                self._sort_column = edit.new_sort_col
+                self._sort_ascending = edit.new_sort_asc
+                self._filter_bar.setText(edit.new_filter)
+                self._filter_pre_text = edit.new_filter
+                self._filter_commit_timer.stop()
+                self._render_table(edit.new_df, edit.new_meta)
+                order = Qt.SortOrder.AscendingOrder if edit.new_sort_asc else Qt.SortOrder.DescendingOrder
+                self.table_widget.horizontalHeader().setSortIndicator(edit.new_sort_col, order)
+                self.table_widget.horizontalHeader().setSortIndicatorShown(True)
+            elif isinstance(edit, _FilterEdit):
+                self._filter_bar.setText(edit.new_text)
+                self._filter_pre_text = edit.new_text
+                self._filter_commit_timer.stop()
+        finally:
+            self._suppressing_history = False
+            self.bulk_checkbox_update = False
+        self._update_undo_redo_buttons()
+        self._update_status_summary()
+
+    def _update_undo_redo_buttons(self):
+        self.undo_button.setEnabled(self._edit_history.can_undo())
+        self.redo_button.setEnabled(self._edit_history.can_redo())
+
+    def apply_row_strikethrough(self, row_idx: int, is_checked: bool):
+        data_row_idx = None
+        if isinstance(self.table_row_map, list) and row_idx < len(self.table_row_map):
+            data_row_idx = self.table_row_map[row_idx]
+        if data_row_idx is None:
+            return
+        if is_checked and row_idx not in self.strikethrough_rows:
+            self.strikethrough_rows.add(row_idx)
+            for col_idx in range(self.table_widget.columnCount() - 1):
+                item = self.table_widget.item(row_idx, col_idx)
+                if item:
+                    font = item.font()
+                    font.setStrikeOut(True)
+                    item.setFont(font)
+                    item.setForeground(QColor("red"))
+        elif not is_checked and row_idx in self.strikethrough_rows:
+            self.strikethrough_rows.discard(row_idx)
+            default_text_color = self._default_table_text_color()
+            for col_idx in range(self.table_widget.columnCount() - 1):
+                item = self.table_widget.item(row_idx, col_idx)
+                if item:
+                    font = item.font()
+                    font.setStrikeOut(False)
+                    item.setFont(font)
+                    header_item = self.table_widget.horizontalHeaderItem(col_idx)
+                    if header_item is None:
+                        continue
+                    col_name = header_item.text()
+                    if self._is_highlighted_cell(data_row_idx, col_name):
+                        item.setForeground(QColor("black"))
+                    else:
+                        item.setForeground(default_text_color)
+
+    def on_error(self, error_msg: str):
+        self.output_text.append(f"\nERROR: {error_msg}\n")
+        self.status_label.setText("Error occurred")
+
+    def on_task_ids_ready(self, task_ids: list):
+        self.task_ids = task_ids
+        self.copy_button.setEnabled(bool(task_ids))
+
+    def on_data_loaded(self, df: pd.DataFrame):
+        self.current_df = df
+        self.export_state_changed.emit(df is not None and not df.empty)
+
+    def on_finished(self):
+        self.start_button.setEnabled(True)
+        self.file_combo.setEnabled(True)
+        self.function_combo.setEnabled(True)
+        self._update_status_summary()
+        primary = self.file_combo.currentData()
+        if primary:
+            self.analysis_complete.emit(Path(primary).stem)
+
+    def clear_output(self):
+        self.output_text.clear()
+        self.table_widget.setRowCount(0)
+        self.table_widget.setColumnCount(0)
+        self.strikethrough_rows.clear()
+        self.task_ids = None
+        self.copy_button.setEnabled(False)
+        self._edit_history.clear()
+        self._pre_edit_text.clear()
+        self._update_undo_redo_buttons()
+        self.status_label.setText("Output cleared")
+        self.export_state_changed.emit(False)
+
+    def _toggle_log(self, checked: bool):
+        if checked:
+            self.output_text.show()
+            self.log_toggle_button.setText("Hide Log")
+        else:
+            self.output_text.hide()
+            self.log_toggle_button.setText("Show Log")
+
+    def _pick_sheet(self, filepath: str):
+        if filepath.lower().endswith(".csv"):
+            return ""
+        try:
+            sheets = ExcelParser(filepath).list_sheets()
+        except Exception:
+            return ""
+        if len(sheets) <= 1:
+            return ""
+        key = f"sheets/{filepath}"
+        last = self.settings.value(key, type=str) or sheets[0]
+        try:
+            current_index = sheets.index(last)
+        except ValueError:
+            current_index = 0
+        chosen, ok = QInputDialog.getItem(
+            self, "Select sheet",
+            f"This workbook contains {len(sheets)} sheets. Pick one:",
+            sheets, current_index, False,
+        )
+        if not ok:
+            return False
+        self.settings.setValue(key, chosen)
+        return chosen
+
+    def export_view(self):
+        if self.view_df is None or self.view_df.empty:
+            QMessageBox.information(self, "Nothing to export", "Run an analysis first.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export current view", "docureader_view.xlsx",
+            "Excel Workbook (*.xlsx);;CSV (*.csv)",
+        )
+        if not path:
+            return
+        try:
+            if path.lower().endswith(".csv"):
+                self.view_df.to_csv(path, index=False)
+            else:
+                _export_xlsx_with_highlights(path, self.view_df, self.view_meta)
+        except Exception as e:
+            QMessageBox.critical(self, "Export failed", str(e))
+            return
+        self.status_label.setText(f"Exported view to {path}")
+        self.output_text.append(f"\nExported view to {path}\n")
+
+    def copy_to_clipboard(self):
+        if self.task_ids:
+            clipboard_text = ", ".join(map(str, self.task_ids))
+            clipboard = QApplication.clipboard()
+            if clipboard is not None:
+                clipboard.setText(clipboard_text)
+            self.status_label.setText(f"Copied {len(self.task_ids)} Task ID(s) to clipboard")
+            self.output_text.append(f"\nCopied to clipboard: {clipboard_text}\n")
+
+    def stop_worker(self) -> None:
+        """Stop any running worker thread gracefully."""
+        if self.worker_thread and self.worker_thread.isRunning():
+            self.worker_thread.quit()
+            self.worker_thread.wait()
+
+    # ------------------------------------------------------------------
+    # Sort, filter, column widths, and status summary
+    # ------------------------------------------------------------------
+
+    def _on_header_clicked(self, col_idx: int) -> None:
+        if self.view_df is None or self.view_meta is None:
+            return
+        if col_idx >= self.table_widget.columnCount() - 1:
+            return
+        header_item = self.table_widget.horizontalHeaderItem(col_idx)
+        if header_item is None:
+            return
+        col_name = header_item.text()
+        if col_name not in self.view_df.columns:
+            return
+
+        # Snapshot pre-sort state for undo
+        old_df = self.view_df.copy()
+        old_meta = self.view_meta
+        old_sort_col = self._sort_column
+        old_sort_asc = self._sort_ascending
+        old_filter = self._filter_bar.text()
+
+        # Determine new sort direction
+        if self._sort_column == col_idx:
+            new_sort_asc = not self._sort_ascending
+        else:
+            new_sort_asc = True
+
+        try:
+            sorted_df = self.view_df.sort_values(
+                by=col_name, ascending=new_sort_asc, na_position="last"
+            )
+        except TypeError:
+            return
+        old_to_new = {old: new for new, old in enumerate(sorted_df.index)}
+        new_highlights = [
+            (old_to_new[r], c, color)
+            for (r, c, color) in self.view_meta.highlights
+            if r in old_to_new
+        ]
+        new_meta = ViewMeta(
+            template_name=self.view_meta.template_name,
+            match_reason=self.view_meta.match_reason,
+            location_column=self.view_meta.location_column,
+            highlights=new_highlights,
+        )
+        new_df = sorted_df.reset_index(drop=True)
+
+        self._sort_column = col_idx
+        self._sort_ascending = new_sort_asc
+        self._render_table(new_df, new_meta)
+        order = Qt.SortOrder.AscendingOrder if new_sort_asc else Qt.SortOrder.DescendingOrder
+        self.table_widget.horizontalHeader().setSortIndicator(col_idx, order)
+        self.table_widget.horizontalHeader().setSortIndicatorShown(True)
+
+        self._edit_history.push(_SortEdit(
+            old_df, old_meta, old_sort_col, old_sort_asc, old_filter,
+            new_df, new_meta, col_idx, new_sort_asc, old_filter,
+        ))
+        self._update_undo_redo_buttons()
+
+    def _on_filter_changed(self, text: str) -> None:
+        if not self._suppressing_history:
+            self._filter_commit_timer.start(600)
+        needle = text.strip().lower()
+        for row in range(self.table_widget.rowCount()):
+            if self.table_row_map is None or row >= len(self.table_row_map):
+                continue
+            if self.table_row_map[row] is None:
+                self.table_widget.setRowHidden(row, bool(needle))
+                continue
+            if not needle:
+                self.table_widget.setRowHidden(row, False)
+                continue
+            match = any(
+                needle in (self.table_widget.item(row, col) or QTableWidgetItem("")).text().lower()
+                for col in range(self.table_widget.columnCount() - 1)
+            )
+            self.table_widget.setRowHidden(row, not match)
+
+    def _on_filter_settled(self) -> None:
+        """Called 600 ms after the last filter keystroke; records a _FilterEdit if the text changed."""
+        current = self._filter_bar.text()
+        if not self._suppressing_history and current != self._filter_pre_text:
+            self._edit_history.push(_FilterEdit(self._filter_pre_text, current))
+            self._filter_pre_text = current
+            self._update_undo_redo_buttons()
+
+    def _on_col_width_changed(self, _idx: int, _old: int, _new: int) -> None:
+        if self._suppress_width_save or self.view_meta is None:
+            return
+        self._save_column_widths(self.view_meta.template_name)
+
+    def _save_column_widths(self, template_name: str) -> None:
+        if not template_name:
+            return
+        header = self.table_widget.horizontalHeader()
+        widths = {str(i): header.sectionSize(i) for i in range(self.table_widget.columnCount())}
+        self.settings.setValue(f"col_widths/{template_name}", widths)
+
+    def _restore_column_widths(self, template_name: str) -> None:
+        if not template_name:
+            return
+        widths = self.settings.value(f"col_widths/{template_name}")
+        if not widths:
+            return
+        header = self.table_widget.horizontalHeader()
+        for i_str, w in widths.items():
+            try:
+                header.resizeSection(int(i_str), int(w))
+            except (ValueError, TypeError):
+                pass
+
+    def _update_status_summary(self) -> None:
+        data_rows = sum(
+            1 for i in range(len(self.table_row_map or []))
+            if self.table_row_map[i] is not None
+        )
+        if data_rows == 0 and not self.task_ids:
+            self.status_label.setText("Analysis complete")
+            return
+        parts: List[str] = [f"{data_rows} rows"]
+        if self.strikethrough_rows:
+            parts.append(f"{len(self.strikethrough_rows)} checked")
+        if self.task_ids:
+            parts.append(f"{len(self.task_ids)} task IDs ready")
+        self.status_label.setText(" | ".join(parts))
+
+
+# ---------------------------------------------------------------------------
+# Main application window (app-level shell)
+# ---------------------------------------------------------------------------
+
+class ExcelParserGUI(QMainWindow):
+    """Main application window.
+
+    Owns the menu bar, QTabWidget, theme, file-system watcher, updater, and
+    template registry.  All per-analysis state lives in AnalysisTab instances.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._update_thread: Optional[_UpdateThread] = None
+        self.registry = TemplateRegistry.load()
+        self.settings = QSettings("DocuReader", "DocuReader")
+        stored = self.settings.value("version/current", "", type=str)
+        if stored and stored != __version__:
+            self.settings.setValue("version/previous", stored)
+        self.settings.setValue("version/current", __version__)
+        self.init_ui()
+        self._start_downloads_watcher()
+
+    def init_ui(self):
+        self.setWindowTitle("Lomar Inventory Control - DocuReader")
+        _icon_path = (
+            Path(sys.executable).parent / "DocuReader.ico"
+            if getattr(sys, "frozen", False)
+            else Path(__file__).parent / "DocuReader.ico"
+        )
+        if _icon_path.exists():
+            self.setWindowIcon(QIcon(str(_icon_path)))
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.resize(int(screen.width() * 0.58), int(screen.height() * 0.88))
+
+        # ----- Menu bar -----
+        tools_menu = self.menuBar().addMenu("&Tools")
+
+        self.update_action = QAction("Check && Install Updates", self)
+        self.update_action.triggered.connect(self.check_for_updates)
+        tools_menu.addAction(self.update_action)
+
+        self.prerelease_action = QAction("Include Pre-Releases", self)
+        self.prerelease_action.setCheckable(True)
+        self.prerelease_action.setChecked(
+            self.settings.value("updater/include_prereleases", False, type=bool)
+        )
+        self.prerelease_action.toggled.connect(
+            lambda v: self.settings.setValue("updater/include_prereleases", bool(v))
+        )
+        tools_menu.addAction(self.prerelease_action)
+
+        self.auto_analyze_action = QAction("Auto-analyze New Files", self)
+        self.auto_analyze_action.setCheckable(True)
+        self.auto_analyze_action.setChecked(
+            self.settings.value("auto_analyze/enabled", False, type=bool)
+        )
+        self.auto_analyze_action.setToolTip(
+            "When a new matching file appears in Downloads, automatically open a tab and run analysis."
+        )
+        self.auto_analyze_action.toggled.connect(
+            lambda v: self.settings.setValue("auto_analyze/enabled", bool(v))
+        )
+        tools_menu.addAction(self.auto_analyze_action)
+
+        tools_menu.addSeparator()
+
+        templates_action = QAction("Templates...", self)
+        templates_action.triggered.connect(self.open_templates_dialog)
+        tools_menu.addAction(templates_action)
+
+        tools_menu.addSeparator()
+
+        self.export_action = QAction("Export View...", self)
+        self.export_action.triggered.connect(self._export_current_view)
+        self.export_action.setEnabled(False)
+        tools_menu.addAction(self.export_action)
+
+        batch_action = QAction("Batch Export...", self)
+        batch_action.triggered.connect(self.batch_export)
+        tools_menu.addAction(batch_action)
+
+        tools_menu.addSeparator()
+
+        version_action = QAction("Version Info...", self)
+        version_action.triggered.connect(self.show_version_info)
+        tools_menu.addAction(version_action)
+
+        tools_menu.addSeparator()
+
+        terminate_action = QAction("Terminate", self)
+        terminate_action.triggered.connect(self.terminate_program)
+        tools_menu.addAction(terminate_action)
+
+        # ----- Central widget -----
+        central = QWidget()
+        central.setObjectName("central_widget")
+        self.setCentralWidget(central)
+        main_layout = QVBoxLayout(central)
+
+        title = QLabel("Inventory DocuReader")
+        title_font = title.font()
+        title_font.setPointSize(14)
+        title_font.setBold(True)
+        title.setFont(title_font)
+        self.title_label = title
+        main_layout.addWidget(title)
+
+        # Tab widget
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setTabsClosable(True)
+        self.tab_widget.tabCloseRequested.connect(self._close_tab)
+        self.tab_widget.currentChanged.connect(self._on_tab_changed)
+
+        new_tab_btn = QPushButton("+")
+        new_tab_btn.setToolTip("Open a new analysis tab  (Ctrl+T)")
+        new_tab_btn.setFixedSize(24, 24)
+        new_tab_btn.clicked.connect(self._new_tab)
+        self.tab_widget.setCornerWidget(new_tab_btn, Qt.Corner.TopRightCorner)
+
+        _new_tab_shortcut = QShortcut(QKeySequence("Ctrl+T"), self)
+        _new_tab_shortcut.activated.connect(self._new_tab)
+
+        main_layout.addWidget(self.tab_widget, 1)
+        self._new_tab()
         self._apply_theme()
 
+    # ------------------------------------------------------------------
+    # Tab management
+    # ------------------------------------------------------------------
+
+    def _new_tab(self) -> "AnalysisTab":
+        tab = AnalysisTab(self.registry, self.settings, self)
+        idx = self.tab_widget.addTab(tab, "New Tab")
+        tab.analysis_complete.connect(lambda name, t=tab: self._rename_tab(t, name))
+        tab.export_state_changed.connect(
+            lambda ready, t=tab: self._on_export_state_changed(t, ready)
+        )
+        self.tab_widget.setCurrentIndex(idx)
+        self._apply_tab_colors(tab)
+        return tab
+
+    def _rename_tab(self, tab: "AnalysisTab", name: str) -> None:
+        idx = self.tab_widget.indexOf(tab)
+        if idx >= 0:
+            self.tab_widget.setTabText(idx, name)
+
+    def _close_tab(self, idx: int) -> None:
+        if self.tab_widget.count() <= 1:
+            return
+        tab = self.tab_widget.widget(idx)
+        if isinstance(tab, AnalysisTab):
+            tab.stop_worker()
+        self.tab_widget.removeTab(idx)
+
+    def _on_tab_changed(self, idx: int) -> None:
+        tab = self.tab_widget.widget(idx)
+        if isinstance(tab, AnalysisTab):
+            self.export_action.setEnabled(
+                tab.view_df is not None and not tab.view_df.empty
+            )
+
+    def _on_export_state_changed(self, tab: "AnalysisTab", ready: bool) -> None:
+        if self._current_tab() is tab:
+            self.export_action.setEnabled(ready)
+
+    def _current_tab(self) -> Optional["AnalysisTab"]:
+        w = self.tab_widget.currentWidget()
+        return w if isinstance(w, AnalysisTab) else None
+
+    def _export_current_view(self) -> None:
+        tab = self._current_tab()
+        if tab:
+            tab.export_view()
+
+    # ------------------------------------------------------------------
+    # Theme
+    # ------------------------------------------------------------------
+
+    def _apply_tab_colors(self, tab: "AnalysisTab") -> None:
+        _palette = QApplication.instance().palette()
+        is_dark = _palette.color(_palette.ColorRole.Window).lightness() < 128
+        label_color = "#A5D6A7" if is_dark else "#00695C"
+        status_color = "#ffffff" if is_dark else "#000000"
+        tab.apply_label_colors(label_color, status_color)
+
     def _apply_theme(self) -> None:
-        """Apply the Cool Teal color scheme, adapting to the system light/dark theme."""
         _palette = QApplication.instance().palette()
         is_dark = _palette.color(_palette.ColorRole.Window).lightness() < 128
 
@@ -883,479 +1963,126 @@ class ExcelParserGUI(QMainWindow):
 
         QApplication.instance().setStyleSheet(qss)
         self.title_label.setStyleSheet(f"QLabel {{ color: {title_color}; }}")
-        self.status_label.setStyleSheet(
-            f"QLabel {{ font-style: italic; font-weight: bold; color: {status_color}; padding: 3px 0; }}"
-        )
-        self.detected_label.setStyleSheet(f"QLabel {{ color: {label_color}; font-style: italic; }}")
-        self.extra_files_label.setStyleSheet(f"QLabel {{ color: {label_color}; font-style: italic; }}")
-
-    def populate_downloads_files(self):
-        """Populate the file combo box with CSV and Excel files from Downloads"""
-        self.file_combo.clear()
-        downloads_path = Path.home() / "Downloads"
-        
-        files = []
-        for ext in ['*.csv', '*.xlsx', '*.xls']:
-            files.extend(downloads_path.glob(ext))
-        
-        if files:
-            # Sort by modification time (most recent first)
-            files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-            
-            for file in files:
-                self.file_combo.addItem(file.name, str(file))
-            
-            self.status_label.setText(f"Found {len(files)} file(s) in Downloads")
-        else:
-            self.file_combo.addItem("No files found", None)
-            self.status_label.setText("No CSV or Excel files found in Downloads folder")
+        for i in range(self.tab_widget.count()):
+            tab = self.tab_widget.widget(i)
+            if isinstance(tab, AnalysisTab):
+                tab.apply_label_colors(label_color, status_color)
 
     # ------------------------------------------------------------------
-    # Multi-file helpers
+    # File-system watcher (refreshes all tabs)
     # ------------------------------------------------------------------
 
-    def add_extra_files(self):
-        """Open a file browser and append chosen files to the extra-files list."""
-        # Refresh the primary file combo first so any newly-downloaded files
-        # are already indexed before the user picks additional files.
-        self.populate_downloads_files()
-        downloads = str(Path.home() / "Downloads")
-        files, _ = QFileDialog.getOpenFileNames(
-            self,
-            "Add files to parse",
-            downloads,
-            "Data files (*.csv *.xlsx *.xls);;All files (*)",
-        )
-        existing_paths = {
-            self.extra_files_list.item(i).data(Qt.ItemDataRole.UserRole)
-            for i in range(self.extra_files_list.count())
-        }
-        for fp in files:
-            if fp in existing_paths:
-                continue
-            item = QListWidgetItem(Path(fp).name)
-            item.setData(Qt.ItemDataRole.UserRole, fp)
-            self.extra_files_list.addItem(item)
-            existing_paths.add(fp)
-        self._refresh_extra_files_ui()
-
-    def remove_extra_file(self):
-        """Remove the currently selected item(s) from the extra-files list."""
-        for item in self.extra_files_list.selectedItems():
-            self.extra_files_list.takeItem(self.extra_files_list.row(item))
-        self._refresh_extra_files_ui()
-
-    def clear_extra_files(self):
-        """Remove all additional files from the list."""
-        self.extra_files_list.clear()
-        self._refresh_extra_files_ui()
-
-    def _refresh_extra_files_ui(self):
-        """Sync the label text and list-widget visibility to the current count."""
-        count = self.extra_files_list.count()
-        if count == 0:
-            self.extra_files_label.setText("Additional files: none")
-            self.extra_files_list.hide()
-        else:
-            noun = "file" if count == 1 else "files"
-            self.extra_files_label.setText(f"Additional files: {count} {noun} selected")
-            self.extra_files_list.show()
-
-    def start_analysis(self):
-        """Start the analysis in a worker thread"""
-        if self.file_combo.currentData() is None:
-            QMessageBox.warning(self, "No File", "No file selected. Please select a file from Downloads.")
-            return
-
-        primary_filepath = self.file_combo.currentData()
-        extra_filepaths = [
-            self.extra_files_list.item(i).data(Qt.ItemDataRole.UserRole)
-            for i in range(self.extra_files_list.count())
-        ]
-        all_filepaths = [primary_filepath] + extra_filepaths
-        selected_function = self.function_combo.currentData()
-
-        # Prompt for sheet selection for every multi-sheet workbook in the list.
-        sheet_names: Dict[str, str] = {}
-        for fp in all_filepaths:
-            sheet = self._pick_sheet(fp)
-            if sheet is False:  # user cancelled
-                return
-            if sheet:
-                sheet_names[fp] = sheet
-
-        # Disable buttons while processing
-        self.start_button.setEnabled(False)
-        self.file_combo.setEnabled(False)
-        self.function_combo.setEnabled(False)
-        self.refresh_button.setEnabled(False)
-        
-        # Clear the previous table
-        self.table_widget.setRowCount(0)
-        self.table_widget.setColumnCount(0)
-        self.strikethrough_rows.clear()
-        self.task_ids = None
-        self.copy_button.setEnabled(False)
-
-        file_count = len(all_filepaths)
-        if file_count > 1:
-            self.status_label.setText(f"Analyzing {file_count} files...")
-        else:
-            self.status_label.setText("Analyzing...")
-
-        # Create and start worker thread
-        self.worker_thread = WorkerThread(all_filepaths, selected_function, self.registry, sheet_names=sheet_names)
-        self.worker_thread.output.connect(self.append_output)
-        self.worker_thread.error.connect(self.on_error)
-        self.worker_thread.table_ready.connect(self.on_table_ready)
-        self.worker_thread.task_ids_ready.connect(self.on_task_ids_ready)
-        self.worker_thread.data_loaded.connect(self.on_data_loaded)
-        self.worker_thread.template_matched.connect(self.on_template_matched)
-        self.worker_thread.finished.connect(self.on_finished)
-        self.worker_thread.start()
-    
-    def append_output(self, text: str):
-        """Append text to the output display"""
-        self.output_text.append(text)
-
-    def on_template_matched(self, template_name: str, reason: str):
-        """Update the 'Detected category' label after template selection."""
-        self.detected_label.setText(f"Detected category: {template_name}")
-        self.detected_label.setToolTip(f"Matched by: {reason}")
-
-    def _is_dark_theme(self) -> bool:
-        """Determine whether the active application theme is dark."""
-        palette = self.table_widget.palette()
-        window_color = palette.color(palette.ColorRole.Window)
-        return window_color.lightness() < 128
-
-    def _default_table_text_color(self) -> QColor:
-        """Return standard table text color based on active theme."""
-        return QColor("white") if self._is_dark_theme() else QColor("black")
-
-    def _is_highlighted_cell(self, data_row_idx: int, col_name: str) -> bool:
-        """Return True when a cell has an active background highlight."""
-        return (data_row_idx, col_name) in self.cell_highlights
+    def _start_downloads_watcher(self) -> None:
+        self._fs_watcher = QFileSystemWatcher(self)
+        self._fs_watcher.addPath(str(Path.home() / "Downloads"))
+        self._fs_watcher.directoryChanged.connect(self._on_downloads_dir_changed)
+        self._known_downloads = self._current_downloads_files()
+        self._auto_analyze_timer = QTimer(self)
+        self._auto_analyze_timer.setSingleShot(True)
+        self._auto_analyze_timer.timeout.connect(self._fire_auto_analyze)
+        self._pending_new_files: set[str] = set()
 
     @staticmethod
-    def _color_for_name(name: str) -> Optional[QColor]:
-        """Map template highlight colour names to QColor swatches."""
-        return {
-            "darkgreen": QColor(130, 200, 150),
-            "darkyellow": QColor(230, 200, 90),
-            "red": QColor(220, 120, 120),
-            "blue": QColor(140, 180, 230),
-        }.get(name)
+    def _current_downloads_files() -> set[str]:
+        downloads = Path.home() / "Downloads"
+        result: set[str] = set()
+        for ext in ("*.csv", "*.xlsx", "*.xls"):
+            for f in downloads.glob(ext):
+                result.add(str(f))
+        return result
 
-    def on_table_ready(self, df: pd.DataFrame, meta: ViewMeta):
-        """Populate the table with data and add the checkbox column."""
-        if df is None or df.empty:
-            self.output_text.append("No data to display in table.\n")
-            return
+    def _on_downloads_dir_changed(self, _path: str) -> None:
+        current = self._current_downloads_files()
+        new_files = current - self._known_downloads
+        self._known_downloads = current
 
-        self._suppressing_history = True
-
-        # Remember the view-shaped df + highlights so "Export view..." can
-        # write exactly what the user is looking at.
-        self.view_df = df.copy()
-        self.view_meta = meta
-        self.export_action.setEnabled(True)
-
-        self.strikethrough_rows.clear()
-
-        # Build cell-highlight lookup from the template-driven ViewMeta.
-        self.cell_highlights = {(int(r), c): color for (r, c, color) in meta.highlights}
-
-        # Use the template-detected location column for divider rows when present.
-        location_col = meta.location_column if meta.location_column in df.columns else None
-        self.location_col = location_col
-
-        render_rows = []
-        self.table_row_map = []
-        self.table_row_location_values = []
-        prev_prefix = None
-        for df_idx, (_, row_data) in enumerate(df.iterrows()):
-            prefix = None
-            location_text = None
-            if location_col:
-                location_value = row_data.get(location_col)
-                location_text = "" if pd.isna(location_value) else str(location_value)
-                parsed_prefix, parsed_number, _ = parse_location_parts(location_text)
-                prefix = (parsed_prefix, parsed_number // 100000 if parsed_number != float("inf") else float("inf"))
-
-            if location_col and prev_prefix is not None and prefix != prev_prefix:
-                render_rows.append({"type": "divider"})
-                self.table_row_map.append(None)
-                self.table_row_location_values.append(None)
-
-            render_rows.append({"type": "data", "df_idx": df_idx, "row_data": row_data})
-            self.table_row_map.append(df_idx)
-            self.table_row_location_values.append(location_text if location_col else None)
-            if location_col:
-                prev_prefix = prefix
-
-        self.table_widget.setRowCount(len(render_rows))
-        self.table_widget.setColumnCount(len(df.columns) + 1)
-
-        headers = list(df.columns) + ["Done?"]
-        self.table_widget.setHorizontalHeaderLabels(headers)
-
-        default_text_color = self._default_table_text_color()
-
-        for row_idx, render_row in enumerate(render_rows):
-            if render_row["type"] == "divider":
-                for col_idx in range(len(df.columns)):
-                    item = QTableWidgetItem("-----")
-                    item.setFlags(Qt.ItemFlag.NoItemFlags)
-                    item.setForeground(default_text_color)
-                    self.table_widget.setItem(row_idx, col_idx, item)
+        for i in range(self.tab_widget.count()):
+            tab = self.tab_widget.widget(i)
+            if not isinstance(tab, AnalysisTab):
                 continue
+            if tab.worker_thread and tab.worker_thread.isRunning():
+                continue
+            previously_selected = tab.file_combo.currentData()
+            tab.populate_downloads_files()
+            if previously_selected:
+                for j in range(tab.file_combo.count()):
+                    if tab.file_combo.itemData(j) == previously_selected:
+                        tab.file_combo.setCurrentIndex(j)
+                        break
 
-            row_data = render_row["row_data"]
-            df_idx = render_row["df_idx"]
+        if new_files and self.auto_analyze_action.isChecked():
+            self._pending_new_files.update(new_files)
+            # Debounce: wait 1.5 s for the file to finish writing before reading headers.
+            self._auto_analyze_timer.start(1500)
 
-            for col_idx, col_name in enumerate(df.columns):
-                value = row_data[col_name]
-                cell_text = "" if pd.isna(value) else str(value)
-                item = QTableWidgetItem(cell_text)
-                color_name = self.cell_highlights.get((df_idx, col_name))
-                if color_name:
-                    qcolor = self._color_for_name(color_name)
-                    if qcolor is not None:
-                        item.setBackground(qcolor)
-                        item.setForeground(QColor("black"))
-                self.table_widget.setItem(row_idx, col_idx, item)
+    def _fire_auto_analyze(self) -> None:
+        """Called 1.5 s after a new file appeared.  Reads headers and triggers analysis."""
+        candidates = self._pending_new_files.copy()
+        self._pending_new_files.clear()
+        for filepath in candidates:
+            self._maybe_auto_analyze(filepath)
 
-            checkbox = QCheckBox()
-            checkbox.stateChanged.connect(lambda checked, r=row_idx: self.on_checkbox_changed(r, checked))
-            self.table_widget.setCellWidget(row_idx, len(df.columns), checkbox)
-
-        self._suppressing_history = False
-        self._edit_history.clear()
-        self._update_undo_redo_buttons()
-        self.table_widget.resizeColumnsToContents()
-        header = self.table_widget.horizontalHeader()
-        if header is not None:
-            header.setStretchLastSection(True)
-    
-    def on_checkbox_changed(self, row_idx: int, state):
-        """Handle checkbox state change — apply/remove strikethrough and record for undo."""
-        if self.bulk_checkbox_update or self._suppressing_history:
+    def _maybe_auto_analyze(self, filepath: str) -> None:
+        """If *filepath* matches a known template, open an idle tab and analyze it."""
+        src = Path(filepath)
+        if not src.exists():
             return
-
-        is_checked = state == 2  # Qt.CheckState.Checked is 2
-
-        data_row_idx = None
-        if isinstance(self.table_row_map, list) and row_idx < len(self.table_row_map):
-            data_row_idx = self.table_row_map[row_idx]
-        if data_row_idx is None:
-            return
-
-        location_value = None
-        if isinstance(self.table_row_location_values, list) and row_idx < len(self.table_row_location_values):
-            location_value = self.table_row_location_values[row_idx]
-
-        self._suppressing_history = True
+        # Read only the header row to identify the template without loading all data.
         try:
-            if location_value is None:
-                # Single-row edit — checkbox already flipped to is_checked.
-                affected = [(row_idx, not is_checked, is_checked)]
-                self.apply_row_strikethrough(row_idx, is_checked)
+            if src.suffix.lower() == ".csv":
+                cols = pd.read_csv(filepath, nrows=0).columns.tolist()
             else:
-                # Location group — bulk-update every row sharing this location.
-                affected = []
-                self.bulk_checkbox_update = True
-                try:
-                    for tidx, row_loc in enumerate(self.table_row_location_values):
-                        if row_loc != location_value:
-                            continue
-                        checkbox = self.table_widget.cellWidget(tidx, self.table_widget.columnCount() - 1)
-                        if isinstance(checkbox, QCheckBox):
-                            # Primary row already flipped; others haven't changed yet.
-                            old = (not is_checked) if tidx == row_idx else checkbox.isChecked()
-                            affected.append((tidx, old, is_checked))
-                            if checkbox.isChecked() != is_checked:
-                                checkbox.setChecked(is_checked)
-                        self.apply_row_strikethrough(tidx, is_checked)
-                finally:
-                    self.bulk_checkbox_update = False
-        finally:
-            self._suppressing_history = False
-
-        self._edit_history.push(_CheckboxEdit(affected))
-        self._update_undo_redo_buttons()
-
-    def _on_current_item_changed(self, current, previous):
-        """Cache the current cell text when focus moves, so undo can restore it."""
-        if current is not None and not self._suppressing_history:
-            self._pre_edit_text[(current.row(), current.column())] = current.text()
-
-    def _on_cell_text_changed(self, item):
-        """Record a user-driven cell text change to the undo history."""
-        if self._suppressing_history:
+                cols = pd.read_excel(filepath, nrows=0).columns.tolist()
+        except Exception:
             return
-        key = (item.row(), item.column())
-        old_text = self._pre_edit_text.get(key)
-        if old_text is not None and item.text() != old_text:
-            self._edit_history.push(_CellTextEdit(
-                row=item.row(), col=item.column(),
-                old_text=old_text, new_text=item.text(),
-            ))
-            self._pre_edit_text[key] = item.text()
-            self._update_undo_redo_buttons()
 
-    def _undo_edit(self):
-        """Undo the most recent table edit."""
-        edit = self._edit_history.undo()
-        if edit is None:
-            return
-        self._suppressing_history = True
-        self.bulk_checkbox_update = True
-        try:
-            if isinstance(edit, _CheckboxEdit):
-                for tidx, old_checked, _new in edit.affected:
-                    cb = self.table_widget.cellWidget(tidx, self.table_widget.columnCount() - 1)
-                    if isinstance(cb, QCheckBox):
-                        cb.setChecked(old_checked)
-                    self.apply_row_strikethrough(tidx, old_checked)
-            elif isinstance(edit, _CellTextEdit):
-                item = self.table_widget.item(edit.row, edit.col)
-                if item:
-                    item.setText(edit.old_text)
-                    self._pre_edit_text[(edit.row, edit.col)] = edit.old_text
-        finally:
-            self._suppressing_history = False
-            self.bulk_checkbox_update = False
-        self._update_undo_redo_buttons()
+        match = self.registry.select(cols, filepath)
+        if match.template is PASSTHROUGH_TEMPLATE:
+            return  # No known template for this file — skip silently.
 
-    def _redo_edit(self):
-        """Reapply the most recently undone table edit."""
-        edit = self._edit_history.redo()
-        if edit is None:
-            return
-        self._suppressing_history = True
-        self.bulk_checkbox_update = True
-        try:
-            if isinstance(edit, _CheckboxEdit):
-                for tidx, _old, new_checked in edit.affected:
-                    cb = self.table_widget.cellWidget(tidx, self.table_widget.columnCount() - 1)
-                    if isinstance(cb, QCheckBox):
-                        cb.setChecked(new_checked)
-                    self.apply_row_strikethrough(tidx, new_checked)
-            elif isinstance(edit, _CellTextEdit):
-                item = self.table_widget.item(edit.row, edit.col)
-                if item:
-                    item.setText(edit.new_text)
-                    self._pre_edit_text[(edit.row, edit.col)] = edit.new_text
-        finally:
-            self._suppressing_history = False
-            self.bulk_checkbox_update = False
-        self._update_undo_redo_buttons()
+        # Find an existing idle tab or open a new one.
+        tab: Optional[AnalysisTab] = None
+        for i in range(self.tab_widget.count()):
+            candidate = self.tab_widget.widget(i)
+            if isinstance(candidate, AnalysisTab):
+                idle = (
+                    candidate.view_df is None
+                    and (candidate.worker_thread is None or not candidate.worker_thread.isRunning())
+                )
+                if idle:
+                    tab = candidate
+                    break
+        if tab is None:
+            tab = self._new_tab()
 
-    def _update_undo_redo_buttons(self):
-        """Sync Undo / Redo button enabled state to the history stacks."""
-        self.undo_button.setEnabled(self._edit_history.can_undo())
-        self.redo_button.setEnabled(self._edit_history.can_redo())
+        # Select the file in the combo (it was just populated by the watcher refresh).
+        for j in range(tab.file_combo.count()):
+            if tab.file_combo.itemData(j) == filepath:
+                tab.file_combo.setCurrentIndex(j)
+                break
 
-    def apply_row_strikethrough(self, row_idx: int, is_checked: bool):
-        """Apply or remove strikethrough for a table row."""
-        data_row_idx = None
-        if isinstance(self.table_row_map, list) and row_idx < len(self.table_row_map):
-            data_row_idx = self.table_row_map[row_idx]
-        if data_row_idx is None:
-            return
-        
-        if is_checked and row_idx not in self.strikethrough_rows:
-            # Apply strikethrough and red color
-            self.strikethrough_rows.add(row_idx)
-            for col_idx in range(self.table_widget.columnCount() - 1):  # Skip checkbox column
-                item = self.table_widget.item(row_idx, col_idx)
-                if item:
-                    font = item.font()
-                    font.setStrikeOut(True)
-                    item.setFont(font)
-                    item.setForeground(QColor("red"))
-        elif not is_checked and row_idx in self.strikethrough_rows:
-            # Remove strikethrough and restore original formatting
-            self.strikethrough_rows.discard(row_idx)
-            default_text_color = self._default_table_text_color()
-            
-            for col_idx in range(self.table_widget.columnCount() - 1):  # Skip checkbox column
-                item = self.table_widget.item(row_idx, col_idx)
-                if item:
-                    font = item.font()
-                    font.setStrikeOut(False)
-                    item.setFont(font)
-                    
-                    # Get column name
-                    header_item = self.table_widget.horizontalHeaderItem(col_idx)
-                    if header_item is None:
-                        continue
-                    col_name = header_item.text()
-                    
-                    # Restore text color: black for highlighted cells, theme-default for others
-                    if self._is_highlighted_cell(data_row_idx, col_name):
-                        item.setForeground(QColor("black"))
-                    else:
-                        item.setForeground(default_text_color)
-    
-    def on_error(self, error_msg: str):
-        """Handle errors from worker thread"""
-        self.output_text.append(f"\nERROR: {error_msg}\n")
-        self.status_label.setText("Error occurred")
-    
-    def on_task_ids_ready(self, task_ids: list):
-        """Handle task IDs from worker thread"""
-        self.task_ids = task_ids
-        self.copy_button.setEnabled(bool(task_ids))
-    
-    def on_data_loaded(self, df: pd.DataFrame):
-        """Handle data loaded from worker thread"""
-        self.current_df = df
-        self.export_action.setEnabled(df is not None and not df.empty)
-    
-    def on_finished(self):
-        """Called when worker thread finishes"""
-        # Re-enable buttons
-        self.start_button.setEnabled(True)
-        self.file_combo.setEnabled(True)
-        self.function_combo.setEnabled(True)
-        self.refresh_button.setEnabled(True)
-        
-        self.status_label.setText("Analysis complete")
-    
-    
-    def clear_output(self):
-        """Clear the output display and table"""
-        self.output_text.clear()
-        self.table_widget.setRowCount(0)
-        self.table_widget.setColumnCount(0)
-        self.strikethrough_rows.clear()
-        self.task_ids = None
-        self.copy_button.setEnabled(False)
-        self._edit_history.clear()
-        self._pre_edit_text.clear()
-        self._update_undo_redo_buttons()
-        self.status_label.setText("Output cleared")
+        # Switch to that tab so the user sees the result.
+        self.tab_widget.setCurrentWidget(tab)
+        tab.status_label.setText(f"Auto-analyzing {src.name}...")
+        tab.start_analysis()
 
-    def _toggle_log(self, checked: bool):
-        """Show or hide the raw activity log pane."""
-        if checked:
-            self.output_text.show()
-            self.log_toggle_button.setText("Hide Log")
-        else:
-            self.output_text.hide()
-            self.log_toggle_button.setText("Show Log")
+        # Flash the taskbar to attract attention if the window is not active.
+        QApplication.alert(self, 0)
+
+    # ------------------------------------------------------------------
+    # App-level menu actions
+    # ------------------------------------------------------------------
 
     def open_templates_dialog(self):
-        """Show the templates CRUD dialog and reload the registry on close."""
         dialog = TemplatesDialog(self.registry, self)
         dialog.exec()
-        # Re-load from disk so any external edits are picked up too.
         self.registry = TemplateRegistry.load()
+        for i in range(self.tab_widget.count()):
+            tab = self.tab_widget.widget(i)
+            if isinstance(tab, AnalysisTab):
+                tab.registry = self.registry
 
     def show_version_info(self):
-        """Display the current and previously installed version."""
         previous = self.settings.value("version/previous", "", type=str)
         if previous:
             message = (
@@ -1369,208 +2096,63 @@ class ExcelParserGUI(QMainWindow):
             )
         QMessageBox.information(self, "Version Info", message)
 
-    def _pick_sheet(self, filepath: str):
-        """Resolve which sheet to read for an Excel file.
-
-        Returns:
-            - The sheet name (str) when one is chosen,
-            - "" when the file is a CSV or has at most one sheet (caller will
-              pass ``None`` to ``WorkerThread`` and let pandas default),
-            - ``False`` when the user cancels the dialog (caller should abort).
-        """
-        if filepath.lower().endswith(".csv"):
-            return ""
-        try:
-            sheets = ExcelParser(filepath).list_sheets()
-        except Exception:
-            return ""
-        if len(sheets) <= 1:
-            return ""
-
-        key = f"sheets/{filepath}"
-        last = self.settings.value(key, type=str) or sheets[0]
-        try:
-            current_index = sheets.index(last)
-        except ValueError:
-            current_index = 0
-
-        chosen, ok = QInputDialog.getItem(
-            self,
-            "Select sheet",
-            f"This workbook contains {len(sheets)} sheets. Pick one:",
-            sheets,
-            current_index,
-            False,
-        )
-        if not ok:
-            return False
-        self.settings.setValue(key, chosen)
-        return chosen
-
-    def export_view(self):
-        """Export the current view (template-applied dataframe) to CSV or XLSX.
-
-        For .xlsx, cell highlights from the active ViewMeta are preserved
-        using openpyxl pattern fills.
-        """
-        if self.view_df is None or self.view_df.empty:
-            QMessageBox.information(self, "Nothing to export", "Run an analysis first.")
-            return
-
-        default_name = "docureader_view.xlsx"
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export current view",
-            default_name,
-            "Excel Workbook (*.xlsx);;CSV (*.csv)",
-        )
-        if not path:
-            return
-
-        try:
-            if path.lower().endswith(".csv"):
-                self.view_df.to_csv(path, index=False)
-            else:
-                self._export_xlsx_with_highlights(path)
-        except Exception as e:
-            QMessageBox.critical(self, "Export failed", str(e))
-            return
-
-        self.status_label.setText(f"Exported view to {path}")
-        self.output_text.append(f"\nExported view to {path}\n")
-
-    def _export_xlsx_with_highlights(self, path: str) -> None:
-        """Write ``self.view_df`` to ``path`` and apply highlight fills."""
-        from openpyxl import Workbook
-        from openpyxl.styles import PatternFill
-
-        df = self.view_df
-        meta = self.view_meta
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "View"
-
-        cols = list(df.columns)
-        ws.append(cols)
-        for _, row in df.iterrows():
-            ws.append(["" if pd.isna(v) else v for v in row.tolist()])
-
-        # Map our colour names to hex fills.
-        hex_for = {
-            "darkgreen": "82C896",
-            "darkyellow": "E6C85A",
-            "red": "DC7878",
-            "blue": "8CB4E6",
-        }
-        if meta is not None and meta.highlights:
-            col_index = {c: i + 1 for i, c in enumerate(cols)}  # openpyxl is 1-based
-            for (data_row, col_name, color_name) in meta.highlights:
-                hex_code = hex_for.get(color_name)
-                col_idx = col_index.get(col_name)
-                if not hex_code or col_idx is None:
-                    continue
-                # +2: header row offset (row 1) + 0-based data_row.
-                ws.cell(row=int(data_row) + 2, column=col_idx).fill = PatternFill(
-                    start_color=hex_code, end_color=hex_code, fill_type="solid"
-                )
-
-        wb.save(path)
-
     def batch_export(self):
-        """Pick N source files, apply each one's matched template, and write
-        one ``<source>.view.xlsx`` per file into a chosen output folder.
-
-        Runs synchronously on the GUI thread - intended for short batches
-        from Downloads. Highlights are preserved (same export path as the
-        single-file export).
-        """
         downloads = str(Path.home() / "Downloads")
         files, _ = QFileDialog.getOpenFileNames(
-            self,
-            "Select files to batch process",
-            downloads,
+            self, "Select files to batch process", downloads,
             "Data files (*.csv *.xlsx *.xls);;All files (*)",
         )
         if not files:
             return
-
-        out_dir = QFileDialog.getExistingDirectory(
-            self, "Select output folder", downloads
-        )
+        out_dir = QFileDialog.getExistingDirectory(self, "Select output folder", downloads)
         if not out_dir:
             return
 
         out_path = Path(out_dir)
         successes = 0
         failures: list[tuple[str, str]] = []
+        tab = self._current_tab()
 
-        self.output_text.append("\n" + "=" * 60 + "\n")
-        self.output_text.append(f"Batch processing {len(files)} file(s) -> {out_dir}\n")
-        self.output_text.append("=" * 60 + "\n")
+        def _log(msg: str):
+            if tab:
+                tab.output_text.append(msg)
 
-        prev_view_df = self.view_df
-        prev_view_meta = self.view_meta
+        _log("\n" + "=" * 60)
+        _log(f"Batch processing {len(files)} file(s) -> {out_dir}")
+        _log("=" * 60)
 
         for src in files:
             src_path = Path(src)
             try:
                 parser = ExcelParser(str(src_path))
-                parser.read_excel()  # pandas defaults; sheet selector is interactive only.
+                parser.read_excel()
                 if parser.df is None:
                     raise RuntimeError("failed to load")
-
                 match = self.registry.select(parser.df.columns, str(src_path))
                 view_df, meta = apply_template(parser.df, match.template)
-
-                # Reuse the existing exporter by stashing the view temporarily.
-                self.view_df = view_df
-                self.view_meta = meta
                 dst = out_path / f"{src_path.stem}.view.xlsx"
-                self._export_xlsx_with_highlights(str(dst))
-
-                self.output_text.append(
-                    f"  OK  {src_path.name}  -> {dst.name}  "
-                    f"[template: {match.template.name}, {len(view_df)} rows]\n"
-                )
+                _export_xlsx_with_highlights(str(dst), view_df, meta)
+                _log(f"  OK  {src_path.name}  -> {dst.name}  "
+                     f"[template: {match.template.name}, {len(view_df)} rows]")
                 successes += 1
             except Exception as e:
                 failures.append((src_path.name, str(e)))
-                self.output_text.append(f"  FAIL  {src_path.name}: {e}\n")
+                _log(f"  FAIL  {src_path.name}: {e}")
 
-        # Restore the on-screen view's state.
-        self.view_df = prev_view_df
-        self.view_meta = prev_view_meta
-
-        self.output_text.append(
-            f"\nBatch complete: {successes} succeeded, {len(failures)} failed.\n"
-        )
-        self.status_label.setText(
-            f"Batch export: {successes}/{len(files)} succeeded"
-        )
+        _log(f"\nBatch complete: {successes} succeeded, {len(failures)} failed.")
+        if tab:
+            tab.status_label.setText(f"Batch export: {successes}/{len(files)} succeeded")
         if failures:
             QMessageBox.warning(
-                self,
-                "Batch export finished with errors",
+                self, "Batch export finished with errors",
                 f"{successes} of {len(files)} files exported.\n\n"
                 + "\n".join(f"- {n}: {e}" for n, e in failures[:10])
                 + ("" if len(failures) <= 10 else f"\n... and {len(failures) - 10} more"),
             )
 
-    def copy_to_clipboard(self):
-        """Copy task IDs to clipboard"""
-        if self.task_ids:
-            clipboard_text = ", ".join(map(str, self.task_ids))
-            clipboard = QApplication.clipboard()
-            if clipboard is not None:
-                clipboard.setText(clipboard_text)
-            self.status_label.setText(f"Copied {len(self.task_ids)} Task ID(s) to clipboard")
-            self.output_text.append(f"\nCopied to clipboard: {clipboard_text}\n")
-
     def check_for_updates(self):
-        """Download and stage application updates, showing a live progress dialog."""
         reply = QMessageBox.question(
-            self,
-            "Update Application",
+            self, "Update Application",
             "This will check GitHub for a newer release and download it if available.\n\n"
             "The application will close and relaunch automatically after the update is applied.\n\n"
             "Do you want to continue?",
@@ -1580,16 +2162,16 @@ class ExcelParserGUI(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
-        self.output_text.append("\n" + "=" * 60 + "\n")
-        self.output_text.append("Checking for updates...\n")
+        tab = self._current_tab()
+        if tab:
+            tab.output_text.append("\n" + "=" * 60 + "\n")
+            tab.output_text.append("Checking for updates...\n")
         self.update_action.setEnabled(False)
         self.update_action.setText("Updating...")
 
         thread = _UpdateThread(include_prereleases=self.prerelease_action.isChecked())
         dialog = _UpdateProgressDialog(self)
         self._update_thread = thread
-
-        # Closures capture _result so the main flow can read them after exec().
         _result: dict = {}
 
         def on_staged(staged_dir, install_dir):
@@ -1605,15 +2187,11 @@ class ExcelParserGUI(QMainWindow):
         thread.status.connect(dialog.set_status)
         thread.staged.connect(on_staged)
         thread.error.connect(on_error)
-
         thread.start()
         accepted = dialog.exec() == QDialog.DialogCode.Accepted
-
-        # Regardless of outcome, tell the thread to stop and wait for it.
         thread.cancel()
         thread.wait(8000)
         self._update_thread = None
-
         self.update_action.setEnabled(True)
         self.update_action.setText("Check && Install Updates")
 
@@ -1621,10 +2199,13 @@ class ExcelParserGUI(QMainWindow):
             err = _result.get("error", "")
             if err:
                 QMessageBox.warning(self, "Update", err)
-                self.output_text.append(f"[Update] {err}\n")
+                if tab:
+                    tab.output_text.append(f"[Update] {err}\n")
             else:
-                self.output_text.append("[Update] Cancelled.\n")
-            self.status_label.setText("Update cancelled")
+                if tab:
+                    tab.output_text.append("[Update] Cancelled.\n")
+            if tab:
+                tab.status_label.setText("Update cancelled")
             return
 
         staged_dir = _result.get("staged_dir")
@@ -1632,12 +2213,12 @@ class ExcelParserGUI(QMainWindow):
         if staged_dir is None or install_dir is None:
             return
 
-        self.output_text.append(f"[Update] Staged at: {staged_dir}\n")
-        self.status_label.setText("Update downloaded — restart to apply")
+        if tab:
+            tab.output_text.append(f"[Update] Staged at: {staged_dir}\n")
+            tab.status_label.setText("Update downloaded — restart to apply")
 
         restart = QMessageBox.question(
-            self,
-            "Update Ready",
+            self, "Update Ready",
             "The update has been downloaded and verified.\n\n"
             "Click Yes to close the application now and apply the update.\n"
             "DocuReader will relaunch automatically once the installation is complete.",
@@ -1649,40 +2230,37 @@ class ExcelParserGUI(QMainWindow):
             rc = updater_github.apply_update(Path(staged_dir), Path(install_dir))
             if rc != 0:
                 QMessageBox.critical(
-                    self,
-                    "Update Failed",
+                    self, "Update Failed",
                     "Failed to launch the update installer.\n\n"
                     "Please try again or reinstall manually.",
                 )
-                self.status_label.setText("Update apply failed.")
+                if tab:
+                    tab.status_label.setText("Update apply failed.")
                 return
             self.close()
         else:
-            self.status_label.setText("Update staged — restart when ready.")
+            if tab:
+                tab.status_label.setText("Update staged — restart when ready.")
 
     def terminate_program(self):
-        """Terminate the application"""
         reply = QMessageBox.question(
-            self,
-            "Terminate Program",
+            self, "Terminate Program",
             "Are you sure you want to close the application?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
+            QMessageBox.StandardButton.No,
         )
-        
         if reply == QMessageBox.StandardButton.Yes:
-            # Stop worker thread if running
-            if self.worker_thread and self.worker_thread.isRunning():
-                self.worker_thread.quit()
-                self.worker_thread.wait()
-            
+            for i in range(self.tab_widget.count()):
+                tab = self.tab_widget.widget(i)
+                if isinstance(tab, AnalysisTab):
+                    tab.stop_worker()
             self.close()
-    
+
     def closeEvent(self, event):
-        """Handle window close event"""
-        if self.worker_thread and self.worker_thread.isRunning():
-            self.worker_thread.quit()
-            self.worker_thread.wait()
+        for i in range(self.tab_widget.count()):
+            tab = self.tab_widget.widget(i)
+            if isinstance(tab, AnalysisTab):
+                tab.stop_worker()
         if self._update_thread and self._update_thread.isRunning():
             self._update_thread.cancel()
             self._update_thread.wait(3000)

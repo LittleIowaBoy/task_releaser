@@ -4,4 +4,4 @@ Read by tr_gui.py, update.py, freeze_setup.py, rebuild_and_package.py,
 and pyproject.toml (via setuptools dynamic version).
 """
 
-__version__ = "0.6.5"
+__version__ = "0.7.0"
