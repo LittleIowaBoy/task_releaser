@@ -302,8 +302,12 @@ def test_apply_update_uses_detached_process_flag(tmp_path: Path, monkeypatch):
 
     assert kwargs_seen, "Popen was not called"
     flags = kwargs_seen[0].get("creationflags", 0)
-    assert flags & subprocess.CREATE_NEW_CONSOLE
+    # Script runs silently in the background — no visible CMD window.
+    assert flags & subprocess.CREATE_NO_WINDOW
     assert flags & subprocess.CREATE_NEW_PROCESS_GROUP
+    assert not (flags & subprocess.CREATE_NEW_CONSOLE), (
+        "CREATE_NEW_CONSOLE would pop up a visible CMD window during update"
+    )
     assert not (flags & subprocess.DETACHED_PROCESS), (
         "DETACHED_PROCESS and CREATE_NEW_CONSOLE are mutually exclusive Win32 flags"
     )
