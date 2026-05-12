@@ -335,34 +335,31 @@ def _build_apply_cmd(staged_dir: Path, install_dir: Path) -> str:
         'set "EXE=%INSTALL%\\DocuReader.exe"\n'
         "\n"
         'echo [%DATE% %TIME%] Update script started. >> "%LOG%"\n'
-        "echo Waiting for DocuReader.exe to exit...\n"
+        ":: Give DocuReader a moment to fully release its handles before checking\n"
+        "timeout /T 2 /NOBREAK >NUL\n"
+        "\n"
         ":waitloop\n"
         'tasklist /FI "IMAGENAME eq DocuReader.exe" 2>NUL | find /I "DocuReader.exe" >NUL\n'
         "if not errorlevel 1 (\n"
+        '    echo [%DATE% %TIME%] Waiting for DocuReader.exe to exit... >> "%LOG%"\n'
         "    timeout /T 1 /NOBREAK >NUL\n"
         "    goto waitloop\n"
         ")\n"
         "\n"
-        'echo [%DATE% %TIME%] DocuReader.exe exited. >> "%LOG%"\n'
+        'echo [%DATE% %TIME%] DocuReader.exe has exited. Applying update... >> "%LOG%"\n'
         "timeout /T 1 /NOBREAK >NUL\n"
-        'echo Copying staged files... >> "%LOG%"\n'
         'robocopy "%STAGED%" "%INSTALL%" /MIR /NFL /NDL /NJH /NJS /NP /R:3 /W:2 >> "%LOG%"\n'
         "if errorlevel 8 (\n"
-        '    echo Update failed during file copy. >> "%LOG%"\n'
-        "    echo Update failed during file copy. >&2\n"
-        "    pause\n"
+        '    echo [%DATE% %TIME%] Update failed during file copy. >> "%LOG%"\n'
         "    exit /b 1\n"
         ")\n"
         "\n"
         'if not exist "%EXE%" (\n'
-        '    echo ERROR: DocuReader.exe not found after update. >> "%LOG%"\n'
-        "    echo ERROR: DocuReader.exe not found after update. >&2\n"
-        "    pause\n"
+        '    echo [%DATE% %TIME%] ERROR: DocuReader.exe not found after update. >> "%LOG%"\n'
         "    exit /b 2\n"
         ")\n"
         "\n"
         'echo [%DATE% %TIME%] Update applied. Relaunching DocuReader... >> "%LOG%"\n'
-        "echo Update applied. Relaunching DocuReader...\n"
         'start "" "%EXE%"\n'
         "endlocal\n"
         "exit /b 0\n"
@@ -403,7 +400,7 @@ def apply_update(staged_dir: Path, install_dir: Path) -> int:
         print(f"[updater] Spawning swap script: {script}")
         subprocess.Popen(
             ["cmd.exe", "/c", str(script)],
-            creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP,
+            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
             close_fds=True,
         )
     except Exception as e:
