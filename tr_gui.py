@@ -1084,21 +1084,27 @@ class AnalysisTab(QWidget):
         self.detected_label.setStyleSheet(f"QLabel {{ color: {label_color}; font-style: italic; }}")
         self.extra_files_label.setStyleSheet(f"QLabel {{ color: {label_color}; font-style: italic; }}")
 
+    def _source_folder(self) -> Path:
+        """Return the configured source folder, falling back to ~/Downloads."""
+        saved = self.settings.value("source_folder", "", type=str)
+        p = Path(saved) if saved else Path.home() / "Downloads"
+        return p if p.is_dir() else Path.home() / "Downloads"
+
     def populate_downloads_files(self) -> None:
-        """Populate the file combo with CSV/Excel files from ~/Downloads."""
+        """Populate the file combo with CSV/Excel files from the configured source folder."""
         self.file_combo.clear()
-        downloads_path = Path.home() / "Downloads"
+        source_path = self._source_folder()
         files = []
         for ext in ["*.csv", "*.xlsx", "*.xls"]:
-            files.extend(downloads_path.glob(ext))
+            files.extend(source_path.glob(ext))
         if files:
             files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
             for f in files:
                 self.file_combo.addItem(f.name, str(f))
-            self.status_label.setText(f"Found {len(files)} file(s) in Downloads")
+            self.status_label.setText(f"Found {len(files)} file(s) in {source_path.name}")
         else:
             self.file_combo.addItem("No files found", None)
-            self.status_label.setText("No CSV or Excel files found in Downloads folder")
+            self.status_label.setText(f"No CSV or Excel files found in {source_path.name}")
 
     # ------------------------------------------------------------------
     # Multi-file helpers
@@ -1106,9 +1112,8 @@ class AnalysisTab(QWidget):
 
     def add_extra_files(self):
         self.populate_downloads_files()
-        downloads = str(Path.home() / "Downloads")
         files, _ = QFileDialog.getOpenFileNames(
-            self, "Add files to parse", downloads,
+            self, "Add files to parse", str(self._source_folder()),
             "Data files (*.csv *.xlsx *.xls);;All files (*)",
         )
         existing_paths = {
@@ -1149,7 +1154,7 @@ class AnalysisTab(QWidget):
 
     def start_analysis(self):
         if self.file_combo.currentData() is None:
-            QMessageBox.warning(self, "No File", "No file selected. Please select a file from Downloads.")
+            QMessageBox.warning(self, "No File", "No file selected. Please select a file from the source folder.")
             return
 
         primary_filepath = self.file_combo.currentData()
@@ -1784,6 +1789,13 @@ class ExcelParserGUI(QMainWindow):
         )
         tools_menu.addAction(self.auto_analyze_action)
 
+        source_folder_action = QAction("Change Source Folder...", self)
+        source_folder_action.setToolTip(
+            "Choose the folder scanned for CSV/Excel files (default: ~/Downloads)."
+        )
+        source_folder_action.triggered.connect(self.change_source_folder)
+        tools_menu.addAction(source_folder_action)
+
         tools_menu.addSeparator()
 
         templates_action = QAction("Templates...", self)
@@ -1972,9 +1984,15 @@ class ExcelParserGUI(QMainWindow):
     # File-system watcher (refreshes all tabs)
     # ------------------------------------------------------------------
 
+    def _source_folder(self) -> Path:
+        """Return the configured source folder, falling back to ~/Downloads."""
+        saved = self.settings.value("source_folder", "", type=str)
+        p = Path(saved) if saved else Path.home() / "Downloads"
+        return p if p.is_dir() else Path.home() / "Downloads"
+
     def _start_downloads_watcher(self) -> None:
         self._fs_watcher = QFileSystemWatcher(self)
-        self._fs_watcher.addPath(str(Path.home() / "Downloads"))
+        self._fs_watcher.addPath(str(self._source_folder()))
         self._fs_watcher.directoryChanged.connect(self._on_downloads_dir_changed)
         self._known_downloads = self._current_downloads_files()
         self._auto_analyze_timer = QTimer(self)
@@ -1982,14 +2000,34 @@ class ExcelParserGUI(QMainWindow):
         self._auto_analyze_timer.timeout.connect(self._fire_auto_analyze)
         self._pending_new_files: set[str] = set()
 
-    @staticmethod
-    def _current_downloads_files() -> set[str]:
-        downloads = Path.home() / "Downloads"
+    def _current_downloads_files(self) -> set[str]:
+        source = self._source_folder()
         result: set[str] = set()
         for ext in ("*.csv", "*.xlsx", "*.xls"):
-            for f in downloads.glob(ext):
+            for f in source.glob(ext):
                 result.add(str(f))
         return result
+
+    def change_source_folder(self) -> None:
+        """Prompt the user to choose a new source folder and rewire the watcher."""
+        current = str(self._source_folder())
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Select Source Folder", current
+        )
+        if not chosen:
+            return
+        self.settings.setValue("source_folder", chosen)
+        # Rewire the file-system watcher to the new folder.
+        old_paths = self._fs_watcher.directories()
+        if old_paths:
+            self._fs_watcher.removePaths(old_paths)
+        self._fs_watcher.addPath(chosen)
+        self._known_downloads = self._current_downloads_files()
+        # Refresh the file combo in every open tab.
+        for i in range(self.tab_widget.count()):
+            tab = self.tab_widget.widget(i)
+            if isinstance(tab, AnalysisTab):
+                tab.populate_downloads_files()
 
     def _on_downloads_dir_changed(self, _path: str) -> None:
         current = self._current_downloads_files()

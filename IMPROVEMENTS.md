@@ -16,7 +16,7 @@ Status key: `[ ]` Not started · `[~]` In progress · `[x]` Complete
 ## High Impact / Medium Effort
 
 - [x] **5. File system watcher (auto-refresh Downloads)** — `QFileSystemWatcher` on `~/Downloads` repopulates the file combo the moment a new CSV/XLSX appears. No more manual "Refresh Files" after every WMS export.
-- [ ] **6. Configurable source folder** — The Downloads path is hardcoded in `populate_downloads_files()`. A persistent folder picker lets users point at a network share, SharePoint sync, or WMS drop directory.
+- [x] **6. Configurable source folder** — The Downloads path is hardcoded in `populate_downloads_files()`. A persistent folder picker lets users point at a network share, SharePoint sync, or WMS drop directory.
 - [ ] **7. Session save / restore** — Serialize checked rows, strikethrough state, and cell edits to a small JSON file keyed by source filename so analysts can hand off mid-shift.
 - [ ] **8. Keyboard shortcuts** — `Ctrl+F` filter focus, `Space` toggle Done? on selected row(s), `Ctrl+E` export, `Ctrl+R` refresh files. Currently the entire workflow is mouse-only.
 
