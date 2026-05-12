@@ -297,22 +297,44 @@ def stage_release(release: ReleaseInfo, progress=None) -> Optional[Path]:
 # ---------------------------------------------------------------------------
 
 
+def _get_short_path(path: Path) -> str:
+    """Return the 8.3 short path for *path* so the .cmd script is ASCII-safe.
+
+    Falls back to ``str(path)`` on non-Windows, if the path does not yet
+    exist, or if the call fails (e.g., 8.3 name generation disabled on the
+    volume).
+    """
+    if os.name != "nt":
+        return str(path)
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(32768)
+        result = ctypes.windll.kernel32.GetShortPathNameW(str(path), buf, len(buf))
+        if result and buf.value:
+            return buf.value
+    except Exception:
+        pass
+    return str(path)
+
+
 def _build_apply_cmd(staged_dir: Path, install_dir: Path) -> str:
     """Return the text of a batch script with the update paths embedded.
 
-    Embedding the paths directly (rather than passing them as %~1 / %~2
-    arguments) avoids the quoting ambiguities that caused the previous
-    ``os.system('start "" cmd /c ...')`` approach to silently misparse paths.
+    Both paths are converted to their 8.3 short-path equivalents before
+    embedding so the script is guaranteed to be ASCII-safe even when the
+    user's AppData folder contains accented or non-Latin characters.
     """
-    staged = str(staged_dir)
-    install = str(install_dir)
+    staged = _get_short_path(staged_dir)
+    install = _get_short_path(install_dir)
     return (
         "@echo off\n"
         "setlocal\n"
+        'set "LOG=%TEMP%\\docureader_update.log"\n'
         f'set "STAGED={staged}"\n'
         f'set "INSTALL={install}"\n'
         'set "EXE=%INSTALL%\\DocuReader.exe"\n'
         "\n"
+        'echo [%DATE% %TIME%] Update script started. >> "%LOG%"\n'
         "echo Waiting for DocuReader.exe to exit...\n"
         ":waitloop\n"
         'tasklist /FI "IMAGENAME eq DocuReader.exe" 2>NUL | find /I "DocuReader.exe" >NUL\n'
@@ -321,16 +343,27 @@ def _build_apply_cmd(staged_dir: Path, install_dir: Path) -> str:
         "    goto waitloop\n"
         ")\n"
         "\n"
-        "echo Copying staged files...\n"
-        'robocopy "%STAGED%" "%INSTALL%" /MIR /NFL /NDL /NJH /NJS /NP /R:3 /W:2\n'
+        'echo [%DATE% %TIME%] DocuReader.exe exited. >> "%LOG%"\n'
+        "timeout /T 1 /NOBREAK >NUL\n"
+        'echo Copying staged files... >> "%LOG%"\n'
+        'robocopy "%STAGED%" "%INSTALL%" /MIR /NFL /NDL /NJH /NJS /NP /R:3 /W:2 >> "%LOG%"\n'
         "if errorlevel 8 (\n"
+        '    echo Update failed during file copy. >> "%LOG%"\n'
         "    echo Update failed during file copy. >&2\n"
         "    pause\n"
         "    exit /b 1\n"
         ")\n"
         "\n"
+        'if not exist "%EXE%" (\n'
+        '    echo ERROR: DocuReader.exe not found after update. >> "%LOG%"\n'
+        "    echo ERROR: DocuReader.exe not found after update. >&2\n"
+        "    pause\n"
+        "    exit /b 2\n"
+        ")\n"
+        "\n"
+        'echo [%DATE% %TIME%] Update applied. Relaunching DocuReader... >> "%LOG%"\n'
         "echo Update applied. Relaunching DocuReader...\n"
-        'start \"\" \"%EXE%\"\n'
+        'start "" "%EXE%"\n'
         "endlocal\n"
         "exit /b 0\n"
     )
@@ -341,7 +374,10 @@ def write_apply_script(staged_dir: Path, install_dir: Path) -> Path:
     content = _build_apply_cmd(staged_dir, install_dir)
     fd, name = tempfile.mkstemp(prefix="docureader_apply_", suffix=".cmd")
     os.close(fd)
-    Path(name).write_text(content, encoding="ascii")
+    try:
+        Path(name).write_text(content, encoding="ascii")
+    except UnicodeEncodeError:
+        Path(name).write_text(content, encoding="cp1252", errors="replace")
     return Path(name)
 
 
@@ -362,15 +398,15 @@ def apply_update(staged_dir: Path, install_dir: Path) -> int:
             file=sys.stderr,
         )
         return 1
-    script = write_apply_script(staged_dir, install_dir)
-    print(f"[updater] Spawning swap script: {script}")
     try:
+        script = write_apply_script(staged_dir, install_dir)
+        print(f"[updater] Spawning swap script: {script}")
         subprocess.Popen(
             ["cmd.exe", "/c", str(script)],
             creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP,
             close_fds=True,
         )
-    except OSError as e:
+    except Exception as e:
         print(f"[updater] Failed to spawn apply script: {e}", file=sys.stderr)
         return 1
     return 0

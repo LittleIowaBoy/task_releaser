@@ -336,7 +336,7 @@ class _UpdateThread(QThread):
         import updater_github
 
         try:
-            self.status.emit("Checking for latest release…")
+            self.status.emit("Checking for latest release...")
             release = updater_github.fetch_release(self.include_prereleases)
             if release is None:
                 self.error.emit(
@@ -351,7 +351,7 @@ class _UpdateThread(QThread):
                 )
                 return
 
-            self.status.emit(f"Downloading {release.tag}…")
+            self.status.emit(f"Downloading {release.tag}...")
 
             def _on_progress(downloaded: int, total: int) -> None:
                 if self._cancelled:
@@ -394,7 +394,7 @@ class _UpdateProgressDialog(QDialog):
         layout.setSpacing(10)
         layout.setContentsMargins(16, 16, 16, 16)
 
-        self.status_label = QLabel("Initializing…")
+        self.status_label = QLabel("Initializing...")
         layout.addWidget(self.status_label)
 
         self.progress_bar = QProgressBar()
@@ -1581,9 +1581,9 @@ class ExcelParserGUI(QMainWindow):
             return
 
         self.output_text.append("\n" + "=" * 60 + "\n")
-        self.output_text.append("Checking for updates…\n")
+        self.output_text.append("Checking for updates...\n")
         self.update_action.setEnabled(False)
-        self.update_action.setText("Updating…")
+        self.update_action.setText("Updating...")
 
         thread = _UpdateThread(include_prereleases=self.prerelease_action.isChecked())
         dialog = _UpdateProgressDialog(self)
