@@ -1592,7 +1592,7 @@ class AnalysisTab(QWidget):
         """Stop any running worker thread gracefully."""
         if self.worker_thread and self.worker_thread.isRunning():
             self.worker_thread.quit()
-            self.worker_thread.wait()
+            self.worker_thread.wait(5000)
 
     # ------------------------------------------------------------------
     # Sort, filter, column widths, and status summary

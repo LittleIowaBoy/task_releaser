@@ -311,6 +311,13 @@ def test_apply_update_uses_detached_process_flag(tmp_path: Path, monkeypatch):
     assert not (flags & subprocess.DETACHED_PROCESS), (
         "DETACHED_PROCESS and CREATE_NEW_CONSOLE are mutually exclusive Win32 flags"
     )
+    # Belt-and-suspenders: STARTUPINFO.SW_HIDE must also be set so cx_Freeze
+    # GUI apps fully suppress the CMD window even if CREATE_NO_WINDOW alone
+    # is insufficient.
+    si = kwargs_seen[0].get("startupinfo")
+    assert si is not None, "STARTUPINFO must be passed to fully hide the CMD window"
+    assert si.dwFlags & subprocess.STARTF_USESHOWWINDOW
+    assert si.wShowWindow == 0, "wShowWindow must be SW_HIDE (0)"
 
 
 def test_apply_update_returns_1_on_popen_oserror(tmp_path: Path, monkeypatch):

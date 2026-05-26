@@ -398,9 +398,17 @@ def apply_update(staged_dir: Path, install_dir: Path) -> int:
     try:
         script = write_apply_script(staged_dir, install_dir)
         print(f"[updater] Spawning swap script: {script}")
+        # Belt-and-suspenders window hiding: CREATE_NO_WINDOW stops a new
+        # console from being allocated; STARTUPINFO.SW_HIDE suppresses any
+        # window that a cx_Freeze or inherited-console edge case might still
+        # create.
+        _si = subprocess.STARTUPINFO()
+        _si.dwFlags = subprocess.STARTF_USESHOWWINDOW
+        _si.wShowWindow = 0  # SW_HIDE
         subprocess.Popen(
             ["cmd.exe", "/c", str(script)],
             creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
+            startupinfo=_si,
             close_fds=True,
         )
     except Exception as e:
