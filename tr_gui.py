@@ -2042,7 +2042,12 @@ class ExcelParserGUI(QMainWindow):
                 continue
             previously_selected = tab.file_combo.currentData()
             tab.populate_downloads_files()
-            if previously_selected:
+            if new_files:
+                # A new file was downloaded — select the most-recently-modified
+                # file (index 0, since populate_downloads_files sorts by mtime
+                # descending), so the user doesn't have to open the dropdown.
+                tab.file_combo.setCurrentIndex(0)
+            elif previously_selected:
                 for j in range(tab.file_combo.count()):
                     if tab.file_combo.itemData(j) == previously_selected:
                         tab.file_combo.setCurrentIndex(j)

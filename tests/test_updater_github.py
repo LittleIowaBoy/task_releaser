@@ -681,7 +681,7 @@ class TestApplyScriptContent:
     def test_script_logs_start_and_exit_and_relaunch(self, tmp_path: Path):
         script = updater_github._build_apply_cmd(tmp_path / "s", tmp_path / "i")
         assert "Update script started" in script
-        assert "DocuReader.exe exited" in script
+        assert "DocuReader.exe has exited" in script
         assert "Relaunching DocuReader" in script
 
     def test_script_has_buffer_timeout_before_robocopy(self, tmp_path: Path):
